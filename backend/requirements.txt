@@ -1,2 +1,6 @@
 opencv-python
 numpy
+transformers
+torch
+Pillow
+mediapipe==0.10.9
