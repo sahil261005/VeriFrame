@@ -1,0 +1,28 @@
+# Ignore VeriFrame plan files
+plan.txt
+sample.mp4
+
+# Python virtual environment
+venv/
+ENV/
+env/
+
+# Python cache & compiled files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local temp and environment directories
+tmp/
+temp_downscaled.mp4
+temp_audio.mp3
+.env
+.env.local
+
+# OS files
+.DS_Store
+Thumbs.db
