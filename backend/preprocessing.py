@@ -11,11 +11,16 @@ import cv2
 def check_provenance(file_path):
     filename = os.path.basename(file_path).lower()
     
-    # check if filename looks like a camera recording or a social download
-    is_camera = bool(re.search(r'(vid|img|pxl|dji|dsc|gopr|mov)_\d+', filename)) or \
-                bool(re.search(r'^\d{8}_\d{6}', filename))
+    # check if filename matches typical phone camera naming or social media apps
+    is_camera = False
+    if re.search(r'(vid|img|pxl|dji|dsc|gopr|mov)_\d+', filename) or re.search(r'^\d{8}_\d{6}', filename):
+        is_camera = True
                 
-    is_social = any(platform in filename for platform in ["whatsapp", "snapchat", "tiktok", "facebook", "instagram", "telegram"])
+    is_social = False
+    for platform in ["whatsapp", "snapchat", "tiktok", "facebook", "instagram", "telegram"]:
+        if platform in filename:
+            is_social = True
+            break
     
     encoder = "unknown"
     metadata_stripped = True
@@ -62,16 +67,9 @@ def check_provenance(file_path):
 # calculate noise variance. real camera sensors have thermal/lens noise.
 # synthetic images (AI generators) tend to be way too smooth.
 def compute_noise_residual(frame):
-    # standard grayscale conversion
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    
-    # blur the image slightly to make a smooth version
     blurred = cv2.GaussianBlur(gray, (3, 3), 0)
-    
-    # get difference between original and blurred (the residual noise)
     residual = gray.astype(np.float32) - blurred.astype(np.float32)
-    
-    # calculate noise variance
     return float(np.var(residual))
 
 # helper to pull out all the useful metadata from opencv
