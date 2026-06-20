@@ -4,3 +4,5 @@ transformers
 torch
 Pillow
 mediapipe==0.10.9
+langgraph
+google-genai
