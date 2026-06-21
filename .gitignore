@@ -26,3 +26,7 @@ temp_audio.mp3
 # OS files
 .DS_Store
 Thumbs.db
+
+# Databases & local run uploads
+*.db
+backend/temp_uploads/

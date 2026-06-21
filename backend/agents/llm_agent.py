@@ -10,11 +10,7 @@ except ImportError:
 
 
 def pick_suspicious_frames(visual_flagged, temporal_flagged, all_frames):
-    """
-    takes flagged frames from visual agent and flagged timestamps from temporal agent.
-    merges them, deduplicates, and picks the actual frame data from all_frames.
-    caps at 8 frames max.
-    """
+    # merge visual and temporal flagged frames, remove duplicates, cap at 8 max
     flagged_times = set()
 
     # add timestamps from visual agent
@@ -41,14 +37,11 @@ def pick_suspicious_frames(visual_flagged, temporal_flagged, all_frames):
 
 
 def analyze_with_gemini(suspicious_frames):
-    """
-    sends suspicious frames to gemini 2.5 flash to analyze visual anomalies.
-    returns overall reasoning, per-frame explanations, and a synthetic llm score.
-    """
+    # run gemini 2.5 flash on suspicious frames to find deepfake cues
     # if no frames to analyze, return empty results
     if not suspicious_frames:
         return (
-            "No suspicious frames were flagged for AI analysis.",
+            "no suspicious frames flagged for analysis",
             {},
             0.0
         )
@@ -63,7 +56,7 @@ def analyze_with_gemini(suspicious_frames):
             ts_str = str(round(f["timestamp"], 3))
             frame_explanations[ts_str] = "AI explanation unavailable (offline fallback mode)."
 
-        reasoning = "Gemini analysis was skipped because no API key was provided."
+        reasoning = "gemini analysis was skipped because no api key was found"
         return reasoning, frame_explanations, 0.0
 
     try:
@@ -125,7 +118,7 @@ def analyze_with_gemini(suspicious_frames):
 
         # average score of gemini ratings
         llm_score = total_fake_conf / num_analyzed if num_analyzed > 0 else 0.0
-        llm_reasoning = f"Gemini analyzed {num_analyzed} flagged frames. Average AI manipulation confidence: {round(llm_score, 2)}"
+        llm_reasoning = f"gemini analyzed {num_analyzed} frames. average confidence: {round(llm_score, 2)}"
 
         return llm_reasoning, frame_explanations, round(llm_score, 4)
 
@@ -136,5 +129,5 @@ def analyze_with_gemini(suspicious_frames):
             ts_str = str(round(f["timestamp"], 3))
             frame_explanations[ts_str] = "AI explanation unavailable (call failed)."
 
-        reasoning = f"Gemini analysis failed with error: {e}."
+        reasoning = f"gemini failed with error: {e}"
         return reasoning, frame_explanations, 0.0

@@ -6,3 +6,10 @@ Pillow
 mediapipe==0.10.9
 langgraph
 google-genai
+fastapi
+uvicorn
+sqlalchemy
+python-multipart
+passlib[bcrypt]
+python-jose[cryptography]
+weasyprint

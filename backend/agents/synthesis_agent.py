@@ -1,8 +1,5 @@
 def compute_verdict(visual_score, temporal_score, llm_score, agent_status):
-    """
-    combines scores from visual, temporal, and llm agents using weighted consensus.
-    redistributes weights proportionally if any agent fails.
-    """
+    # calculate final verdict from visual, temporal, and llm scores. redistribute weights if any node fails
     base_weights = {
         "visual": 0.40,
         "temporal": 0.30,
@@ -53,9 +50,7 @@ def compute_verdict(visual_score, temporal_score, llm_score, agent_status):
 
 
 def build_report(state):
-    """
-    builds the final report JSON structure from the completed state.
-    """
+    # compile all agent metrics and metadata into a final dictionary
     # check if any agent failed
     agent_status = state.get("agent_status", {})
     is_partial = False
