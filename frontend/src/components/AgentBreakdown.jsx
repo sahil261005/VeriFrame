@@ -1,5 +1,4 @@
 import React from 'react';
-import { Camera, Cpu, Brain, AlertTriangle } from 'lucide-react';
 
 function AgentBreakdown({ breakdown, isPartial }) {
   const visual = breakdown?.visual_agent || {};
@@ -20,7 +19,6 @@ function AgentBreakdown({ breakdown, isPartial }) {
           gap: '10px',
           alignItems: 'center'
         }}>
-          <AlertTriangle size={20} style={{ flexShrink: 0 }} />
           <div>
             <strong>Partial Analysis Warning:</strong> Some analysis agents failed during execution. Consensus weights were dynamically redistributed among available agents.
           </div>
@@ -34,19 +32,8 @@ function AgentBreakdown({ breakdown, isPartial }) {
       }}>
         {/* Visual Card */}
         <div className="card" style={{ opacity: visual.status === 'failed' ? 0.5 : 1 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
-            <div style={{
-              width: '40px',
-              height: '40px',
-              borderRadius: '8px',
-              backgroundColor: visual.status === 'failed' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(59, 130, 246, 0.1)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: visual.status === 'failed' ? 'var(--danger)' : 'var(--primary)'
-            }}>
-              <Camera size={22} />
-            </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+            <span style={{ fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase', color: 'var(--primary)' }}>[ Visual ]</span>
             <span className={`badge ${visual.status === 'success' ? 'badge-authentic' : 'badge-manipulated'}`} style={{ border: 'none' }}>
               {visual.status}
             </span>
@@ -63,19 +50,8 @@ function AgentBreakdown({ breakdown, isPartial }) {
 
         {/* Temporal Card */}
         <div className="card" style={{ opacity: temporal.status === 'failed' ? 0.5 : 1 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
-            <div style={{
-              width: '40px',
-              height: '40px',
-              borderRadius: '8px',
-              backgroundColor: temporal.status === 'failed' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(245, 158, 11, 0.1)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: temporal.status === 'failed' ? 'var(--danger)' : 'var(--warning)'
-            }}>
-              <Cpu size={22} />
-            </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+            <span style={{ fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase', color: 'var(--warning)' }}>[ Temporal ]</span>
             <span className={`badge ${temporal.status === 'success' ? 'badge-authentic' : 'badge-manipulated'}`} style={{ border: 'none' }}>
               {temporal.status}
             </span>
@@ -92,19 +68,8 @@ function AgentBreakdown({ breakdown, isPartial }) {
 
         {/* LLM Card */}
         <div className="card" style={{ opacity: llm.status === 'failed' ? 0.5 : 1 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
-            <div style={{
-              width: '40px',
-              height: '40px',
-              borderRadius: '8px',
-              backgroundColor: llm.status === 'failed' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: llm.status === 'failed' ? 'var(--danger)' : 'var(--success)'
-            }}>
-              <Brain size={22} />
-            </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+            <span style={{ fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase', color: 'var(--success)' }}>[ Reasoning ]</span>
             <span className={`badge ${llm.status === 'success' ? 'badge-authentic' : 'badge-manipulated'}`} style={{ border: 'none' }}>
               {llm.status}
             </span>
@@ -124,3 +89,4 @@ function AgentBreakdown({ breakdown, isPartial }) {
 }
 
 export default AgentBreakdown;
+

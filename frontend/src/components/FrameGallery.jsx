@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { Eye, X } from 'lucide-react';
 
 function FrameGallery({ thumbnails, explanations }) {
   const [selectedFrame, setSelectedFrame] = useState(null);
@@ -62,11 +61,14 @@ function FrameGallery({ thumbnails, explanations }) {
                 alignItems: 'center',
                 justifyContent: 'center',
                 opacity: 0,
-                transition: 'var(--transition)'
+                transition: 'var(--transition)',
+                color: '#fff',
+                fontSize: '11px',
+                fontWeight: 'bold'
               }}
               className="gallery-hover"
               >
-                <Eye size={16} style={{ color: '#fff' }} />
+                [ VIEW ]
               </div>
 
               {/* timestamp tag */}
@@ -117,10 +119,12 @@ function FrameGallery({ thumbnails, explanations }) {
                 background: 'none',
                 border: 'none',
                 color: 'var(--text-secondary)',
-                cursor: 'pointer'
+                cursor: 'pointer',
+                fontWeight: 'bold',
+                fontSize: '14px'
               }}
             >
-              <X size={18} />
+              ✕
             </button>
 
             <h3 style={{ fontSize: '15px', fontWeight: '700', marginBottom: '12px', color: 'var(--text-primary)' }}>
@@ -164,3 +168,4 @@ function FrameGallery({ thumbnails, explanations }) {
 }
 
 export default FrameGallery;
+

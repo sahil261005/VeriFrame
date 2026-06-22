@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from 'react';
-import { Loader2, CheckCircle2, Circle } from 'lucide-react';
 import { analysisService } from '../api';
 
 function StatusFeed({ jobId, onAnalysisComplete }) {
@@ -71,7 +70,9 @@ function StatusFeed({ jobId, onAnalysisComplete }) {
             <div style={{ color: 'var(--danger)', fontSize: '18px', fontWeight: '600' }}>Analysis Failed</div>
           ) : (
             <>
-              <Loader2 className="spinner" size={48} style={{ color: 'var(--primary)', animation: 'spin 1.5s linear infinite', marginBottom: '20px' }} />
+              <div style={{ fontSize: '14px', fontWeight: 'bold', color: 'var(--primary)', border: '1px solid var(--primary)', padding: '6px 12px', borderRadius: '4px', textTransform: 'uppercase', marginBottom: '15px', letterSpacing: '0.05em' }}>
+                Analyzing Video...
+              </div>
               <h3 style={{ fontSize: '20px', fontWeight: '700', marginBottom: '8px' }}>Processing Video...</h3>
               <p style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
                 Our LangGraph agent swarm is analyzing your file. Please do not close this window.
@@ -92,13 +93,13 @@ function StatusFeed({ jobId, onAnalysisComplete }) {
 
               return (
                 <div key={idx} style={{ display: 'flex', gap: '16px', alignItems: 'flex-start', opacity: isCompleted || isActive ? 1 : 0.4 }}>
-                  <div style={{ marginTop: '2px' }}>
+                  <div style={{ marginTop: '2px', fontFamily: 'monospace', fontSize: '12px', fontWeight: '700', width: '80px', flexShrink: 0 }}>
                     {isCompleted ? (
-                      <CheckCircle2 size={20} style={{ color: 'var(--success)' }} />
+                      <span style={{ color: 'var(--success)' }}>[ DONE ]</span>
                     ) : isActive ? (
-                      <Loader2 size={20} style={{ color: 'var(--primary)', animation: 'spin 1s linear infinite' }} />
+                      <span style={{ color: 'var(--primary)' }}>[ RUNNING ]</span>
                     ) : (
-                      <Circle size={20} style={{ color: 'var(--text-muted)' }} />
+                      <span style={{ color: 'var(--text-muted)' }}>[ PENDING ]</span>
                     )}
                   </div>
                   <div>
@@ -120,3 +121,4 @@ function StatusFeed({ jobId, onAnalysisComplete }) {
 }
 
 export default StatusFeed;
+

@@ -1,6 +1,5 @@
 import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Shield, LogOut, Video } from 'lucide-react';
 import { authService } from '../api';
 
 function Navbar() {
@@ -16,20 +15,17 @@ function Navbar() {
   return (
     <nav className="navbar">
       <div className="nav-content">
-        <Link to="/" className="logo">
-          <Shield size={22} />
-          Veri<span>Frame</span>
+        <Link to="/" className="logo" style={{ textDecoration: 'none', color: 'var(--text-primary)', fontWeight: '700', fontSize: '20px' }}>
+          VeriFrame
         </Link>
         <div className="nav-links">
           {isAuthenticated ? (
             <>
-              <Link to="/" className="logo" style={{ fontSize: '15px', fontWeight: '500', marginRight: '15px' }}>
-                <Video size={18} />
+              <Link to="/" style={{ fontSize: '15px', fontWeight: '500', marginRight: '15px', textDecoration: 'none', color: 'var(--primary)' }}>
                 New Scan
               </Link>
               <span className="nav-user" style={{ marginRight: '10px' }}>{userEmail}</span>
               <button onClick={handleLogout} className="btn btn-secondary" style={{ padding: '8px 16px', fontSize: '13px' }}>
-                <LogOut size={16} />
                 Logout
               </button>
             </>
@@ -46,3 +42,4 @@ function Navbar() {
 }
 
 export default Navbar;
+

@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { Lock, Mail } from 'lucide-react';
 import { authService } from '../api';
 
 function Login() {
@@ -16,7 +15,6 @@ function Login() {
     setLoading(true);
     try {
       await authService.login(email, password);
-      // reload or redirect to home to refresh navbar auth state
       window.location.href = '/';
     } catch (err) {
       setError(err.response?.data?.detail || 'Invalid email or password');
@@ -39,13 +37,10 @@ function Login() {
         <form onSubmit={handleSubmit}>
           <div className="form-group">
             <label className="form-label">Email Address</label>
-            <div style={{ position: 'relative' }}>
-              <Mail size={18} style={{ position: 'absolute', left: '12px', top: '15px', color: 'var(--text-muted)' }} />
+            <div>
               <input
                 type="email"
                 className="form-input"
-                style={{ paddingLeft: '40px' }}
-                placeholder="you@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
@@ -54,13 +49,10 @@ function Login() {
           </div>
           <div className="form-group">
             <label className="form-label">Password</label>
-            <div style={{ position: 'relative' }}>
-              <Lock size={18} style={{ position: 'absolute', left: '12px', top: '15px', color: 'var(--text-muted)' }} />
+            <div>
               <input
                 type="password"
                 className="form-input"
-                style={{ paddingLeft: '40px' }}
-                placeholder="••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
@@ -83,3 +75,4 @@ function Login() {
 }
 
 export default Login;
+

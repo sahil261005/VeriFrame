@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { Download, ChevronLeft, Calendar, FileText, Play } from 'lucide-react';
 import { analysisService } from '../api';
 import AgentBreakdown from './AgentBreakdown';
 import ConfidenceChart from './ConfidenceChart';
@@ -64,7 +63,7 @@ function ResultsDashboard() {
           <h2 style={{ color: 'var(--danger)', fontSize: '18px', marginBottom: '10px' }}>Failed to Load</h2>
           <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>{error}</p>
           <Link to="/" className="btn btn-secondary">
-            <ChevronLeft size={16} /> Scan New Video
+            ← Scan New Video
           </Link>
         </div>
       </div>
@@ -100,12 +99,11 @@ function ResultsDashboard() {
       {/* back navigation */}
       <div style={{ marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <Link to="/" style={{ fontSize: '13px', fontWeight: '500', color: 'var(--primary)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '4px' }}>
-          <ChevronLeft size={16} /> Scan new video
+          ← Scan new video
         </Link>
         
         <button onClick={handleDownload} className="btn" disabled={downloading} style={{ padding: '8px 16px', fontSize: '13px' }}>
-          <Download size={14} />
-          {downloading ? 'Downloading...' : 'Export Report'}
+          {downloading ? 'Downloading...' : 'Export Report (PDF)'}
         </button>
       </div>
 
@@ -114,19 +112,16 @@ function ResultsDashboard() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '20px' }}>
           <div>
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '6px' }}>
-              <FileText size={18} style={{ color: 'var(--primary)' }} />
               <h2 style={{ fontSize: '16px', fontWeight: '700', color: 'var(--text-primary)', wordBreak: 'break-all' }}>
                 {data.video_filename}
               </h2>
             </div>
             <div style={{ display: 'flex', gap: '16px', fontSize: '12px', color: 'var(--text-muted)' }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <Calendar size={13} />
-                {new Date(data.created_at).toLocaleDateString()}
+              <span>
+                Scanned: {new Date(data.created_at).toLocaleDateString()}
               </span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <Play size={13} />
-                {data.duration.toFixed(2)}s duration
+              <span>
+                Duration: {data.duration.toFixed(2)}s
               </span>
             </div>
           </div>
@@ -177,3 +172,4 @@ function ResultsDashboard() {
 }
 
 export default ResultsDashboard;
+

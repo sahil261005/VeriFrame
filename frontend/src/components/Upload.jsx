@@ -1,5 +1,4 @@
 import React, { useState, useRef } from 'react';
-import { Upload as UploadIcon, AlertTriangle, FileVideo } from 'lucide-react';
 import { analysisService } from '../api';
 
 function Upload({ onUploadSuccess }) {
@@ -81,7 +80,6 @@ function Upload({ onUploadSuccess }) {
 
         {error && (
           <div style={{ padding: '12px', borderRadius: '6px', backgroundColor: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)', color: '#ef4444', fontSize: '14px', marginBottom: '20px', display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <AlertTriangle size={18} style={{ flexShrink: 0 }} />
             <span>{error}</span>
           </div>
         )}
@@ -115,10 +113,9 @@ function Upload({ onUploadSuccess }) {
           >
             {file ? (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
-                <FileVideo size={48} style={{ color: 'var(--primary)' }} />
                 <div>
                   <div style={{ fontWeight: '600', fontSize: '15px', color: 'var(--text-primary)', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {file.name}
+                    Selected File: {file.name}
                   </div>
                   <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginTop: '4px' }}>
                     {(file.size / (1024 * 1024)).toFixed(2)} MB
@@ -127,9 +124,8 @@ function Upload({ onUploadSuccess }) {
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
-                <UploadIcon size={48} style={{ color: 'var(--text-muted)' }} />
                 <div style={{ color: 'var(--text-secondary)' }}>
-                  <span style={{ color: 'var(--primary)', fontWeight: '600' }}>Click to upload</span> or drag and drop
+                  <span style={{ color: 'var(--primary)', fontWeight: '600' }}>Click to select video</span> or drag and drop here
                 </div>
                 <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
                   Supports MP4, AVI, MOV, WEBM (Max duration: 30s)
@@ -167,3 +163,4 @@ function Upload({ onUploadSuccess }) {
 }
 
 export default Upload;
+

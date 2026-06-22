@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { Lock, Mail } from 'lucide-react';
 import { authService } from '../api';
 
 function Register() {
@@ -23,7 +22,6 @@ function Register() {
     setLoading(true);
     try {
       await authService.register(email, password);
-      // reload or redirect to home to refresh navbar auth state
       window.location.href = '/';
     } catch (err) {
       setError(err.response?.data?.detail || 'Registration failed. Try again.');
@@ -46,13 +44,10 @@ function Register() {
         <form onSubmit={handleSubmit}>
           <div className="form-group">
             <label className="form-label">Email Address</label>
-            <div style={{ position: 'relative' }}>
-              <Mail size={18} style={{ position: 'absolute', left: '12px', top: '15px', color: 'var(--text-muted)' }} />
+            <div>
               <input
                 type="email"
                 className="form-input"
-                style={{ paddingLeft: '40px' }}
-                placeholder="you@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
@@ -61,13 +56,10 @@ function Register() {
           </div>
           <div className="form-group">
             <label className="form-label">Password</label>
-            <div style={{ position: 'relative' }}>
-              <Lock size={18} style={{ position: 'absolute', left: '12px', top: '15px', color: 'var(--text-muted)' }} />
+            <div>
               <input
                 type="password"
                 className="form-input"
-                style={{ paddingLeft: '40px' }}
-                placeholder="••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
@@ -76,13 +68,10 @@ function Register() {
           </div>
           <div className="form-group">
             <label className="form-label">Confirm Password</label>
-            <div style={{ position: 'relative' }}>
-              <Lock size={18} style={{ position: 'absolute', left: '12px', top: '15px', color: 'var(--text-muted)' }} />
+            <div>
               <input
                 type="password"
                 className="form-input"
-                style={{ paddingLeft: '40px' }}
-                placeholder="••••••••"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 required
@@ -105,3 +94,4 @@ function Register() {
 }
 
 export default Register;
+
