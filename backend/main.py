@@ -294,16 +294,6 @@ def get_analysis(
     )
 
 
-@app.get("/history", response_model=List[schemas.JobStatusResponse])
-def get_history(
-    db: Session = Depends(database.get_db),
-    current_user: models.User = Depends(auth.get_current_user)
-):
-    """list all past analyses of the current user"""
-    jobs = db.query(models.AnalysisJob).filter(models.AnalysisJob.user_id == current_user.id).order_by(models.AnalysisJob.created_at.desc()).all()
-    return jobs
-
-
 @app.get("/report/{job_id}/pdf")
 def get_report_pdf(
     job_id: str,
