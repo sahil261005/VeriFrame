@@ -92,39 +92,3 @@ def analyze_frames(frames, pipe):
 
     return round(visual_score, 4), flagged, per_frame_results
 
-
-# quick local test
-if __name__ == "__main__":
-    import sys
-    sys.path.insert(0, "..")
-
-    from preprocessing import validate_video, extract_frames, downscale_video
-    import os
-
-    if len(sys.argv) < 2:
-        print("Usage: python visual_agent.py <path_to_video>")
-        sys.exit(1)
-
-    video = sys.argv[1]
-    print(f"Testing visual agent on: {video}")
-
-    meta = validate_video(video)
-    print(f"Video duration: {meta['duration']}s, FPS: {meta['fps']}")
-
-    # downscale first to save time
-    temp_path = "temp_visual_test.mp4"
-    downscale_video(video, temp_path)
-    frames = extract_frames(temp_path, interval=0.5)
-    print(f"Got {len(frames)} frames")
-
-    pipe = load_model()
-    score, flagged, all_results = analyze_frames(frames, pipe)
-
-    print(f"\nVisual Score: {score}")
-    print(f"Flagged {len(flagged)} frames:")
-    for f in flagged:
-        print(f"  t={f['timestamp']}s  fake_conf={f['fake_confidence']}  noise={f['noise_variance']}  label={f['label']}")
-
-    # remove temp video
-    if os.path.exists(temp_path):
-        os.remove(temp_path)

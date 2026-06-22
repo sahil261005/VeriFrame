@@ -180,37 +180,3 @@ def run_pipeline(frames, metadata):
     final_state = compiled_graph.invoke(initial_state)
     return final_state
 
-
-# local check
-if __name__ == "__main__":
-    import sys
-    import os
-    sys.path.insert(0, "..")
-    
-    from preprocessing import validate_video, extract_frames, downscale_video
-
-    if len(sys.argv) < 2:
-        print("Usage: python orchestrator.py <path_to_video>")
-        sys.exit(1)
-
-    video = sys.argv[1]
-    print(f"Running LangGraph orchestrator on: {video}")
-
-    meta = validate_video(video)
-    temp_path = "temp_orch_test.mp4"
-    downscale_video(video, temp_path)
-    
-    frames = extract_frames(temp_path, interval=1.0)
-    print(f"Extracted {len(frames)} frames for pipeline.")
-
-    # run full pipeline (will use fallback modes since we are offline/sandbox-bound)
-    result = run_pipeline(frames, meta)
-    
-    print("\n" + "="*40)
-    print("FINAL REPORT COMPILED:")
-    print("="*40)
-    import json
-    print(json.dumps(result.get("report", {}), indent=2))
-    
-    if os.path.exists(temp_path):
-        os.remove(temp_path)
