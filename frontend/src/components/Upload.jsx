@@ -101,8 +101,8 @@ function Upload({ onUploadSuccess }) {
             onDragLeave={handleDrag}
             onDrop={handleDrop}
             style={{
-              border: '2px dashed var(--border-color)',
-              borderRadius: '12px',
+              border: '1px solid var(--border-color)',
+              borderRadius: '6px',
               padding: '40px 20px',
               textAlign: 'center',
               cursor: 'pointer',
