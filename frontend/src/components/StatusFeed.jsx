@@ -9,10 +9,10 @@ function StatusFeed({ jobId, onAnalysisComplete }) {
   const [currentStep, setCurrentStep] = useState(0);
 
   const steps = [
-    { label: 'Downscaling and preprocessing...', desc: 'Optimizing resolution to 480p and checking metadata.' },
-    { label: 'Running parallel visual/temporal models...', desc: 'Analyzing frame sharpness and facial keypoints shifts.' },
-    { label: 'Generating Gemini AI visual reasoning...', desc: 'Sending suspicious frames to Gemini 2.5 Flash.' },
-    { label: 'Synthesizing consensus report...', desc: 'Recalculating weights and building final verdict.' }
+    { label: 'Decompressing and segmenting media...', desc: 'Extracting video keyframes and validating stream container.' },
+    { label: 'Running visual artifact inspection...', desc: 'Analyzing color channel noise residuals and spatial anomalies.' },
+    { label: 'Analyzing motion and temporal flow...', desc: 'Tracking facial landmarks and movement continuity between adjacent frames.' },
+    { label: 'Generating consensus score...', desc: 'Calculating weighted averages from visual and temporal detectors.' }
   ];
 
   useEffect(() => {
@@ -70,12 +70,12 @@ function StatusFeed({ jobId, onAnalysisComplete }) {
             <div style={{ color: 'var(--danger)', fontSize: '18px', fontWeight: '600' }}>Analysis Failed</div>
           ) : (
             <>
-              <div style={{ fontSize: '14px', fontWeight: 'bold', color: 'var(--primary)', border: '1px solid var(--primary)', padding: '6px 12px', borderRadius: '4px', textTransform: 'uppercase', marginBottom: '15px', letterSpacing: '0.05em' }}>
-                Analyzing Video...
+              <div style={{ fontSize: '14px', fontWeight: '600', color: 'var(--text-secondary)', marginBottom: '15px' }}>
+                Scanning file...
               </div>
               <h3 style={{ fontSize: '20px', fontWeight: '700', marginBottom: '8px' }}>Processing Video...</h3>
               <p style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
-                Our LangGraph agent swarm is analyzing your file. Please do not close this window.
+                Running localized computer vision classification models. Please do not close this page.
               </p>
             </>
           )}
@@ -121,4 +121,5 @@ function StatusFeed({ jobId, onAnalysisComplete }) {
 }
 
 export default StatusFeed;
+
 

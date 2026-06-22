@@ -69,14 +69,14 @@ function AgentBreakdown({ breakdown, isPartial }) {
         {/* LLM Card */}
         <div className="card" style={{ opacity: llm.status === 'failed' ? 0.5 : 1 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-            <span style={{ fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase', color: 'var(--success)' }}>[ Reasoning ]</span>
+            <span style={{ fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase', color: 'var(--success)' }}>[ Semantic ]</span>
             <span className={`badge ${llm.status === 'success' ? 'badge-authentic' : 'badge-manipulated'}`} style={{ border: 'none' }}>
               {llm.status}
             </span>
           </div>
-          <h4 style={{ fontSize: '16px', fontWeight: '700', marginBottom: '6px' }}>AI Reasoning Swarm</h4>
+          <h4 style={{ fontSize: '16px', fontWeight: '700', marginBottom: '6px' }}>Semantic Coherence</h4>
           <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
-            Calls Gemini 2.5 Flash to inspect anomalies on target frames.
+            Evaluates contextual sync and high-level scene consistency.
           </p>
           <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '12px', display: 'flex', justifyContent: 'space-between', fontSize: '14px' }}>
             <span style={{ color: 'var(--text-secondary)' }}>Average Score</span>
@@ -89,4 +89,5 @@ function AgentBreakdown({ breakdown, isPartial }) {
 }
 
 export default AgentBreakdown;
+
 
