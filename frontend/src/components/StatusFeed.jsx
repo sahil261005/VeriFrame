@@ -4,9 +4,6 @@ import { analysisService } from '../api';
 function StatusFeed({ jobId, onAnalysisComplete }) {
   const [status, setStatus] = useState('processing');
   const [error, setError] = useState('');
-  
-  // mock steps representing the stages of the pipeline
-  const [currentStep, setCurrentStep] = useState(0);
 
   const steps = [
     { label: 'Decompressing and segmenting media...', desc: 'Extracting video keyframes and validating stream container.' },
@@ -17,17 +14,6 @@ function StatusFeed({ jobId, onAnalysisComplete }) {
 
   useEffect(() => {
     let intervalId;
-    let stepTimer;
-
-    // cycle through mock steps to give visual feedback to the user
-    stepTimer = setInterval(() => {
-      setCurrentStep((prev) => {
-        if (prev < steps.length - 1) {
-          return prev + 1;
-        }
-        return prev;
-      });
-    }, 4000);
 
     const checkStatus = async () => {
       try {
@@ -36,15 +22,9 @@ function StatusFeed({ jobId, onAnalysisComplete }) {
         
         if (data.status === 'completed') {
           clearInterval(intervalId);
-          clearInterval(stepTimer);
-          setCurrentStep(steps.length); // mark all completed
-          // brief delay so the user sees everything completed before routing
-          setTimeout(() => {
-            onAnalysisComplete(jobId);
-          }, 1000);
+          onAnalysisComplete(jobId);
         } else if (data.status === 'failed') {
           clearInterval(intervalId);
-          clearInterval(stepTimer);
           setError('Video analysis pipeline encountered an error.');
         }
       } catch (err) {
@@ -58,7 +38,6 @@ function StatusFeed({ jobId, onAnalysisComplete }) {
 
     return () => {
       clearInterval(intervalId);
-      clearInterval(stepTimer);
     };
   }, [jobId]);
 
@@ -86,33 +65,23 @@ function StatusFeed({ jobId, onAnalysisComplete }) {
             {error}
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            {steps.map((step, idx) => {
-              const isCompleted = idx < currentStep;
-              const isActive = idx === currentStep;
-
-              return (
-                <div key={idx} style={{ display: 'flex', gap: '16px', alignItems: 'flex-start', opacity: isCompleted || isActive ? 1 : 0.4 }}>
-                  <div style={{ marginTop: '2px', fontFamily: 'monospace', fontSize: '12px', fontWeight: '700', width: '80px', flexShrink: 0 }}>
-                    {isCompleted ? (
-                      <span style={{ color: 'var(--success)' }}>[ DONE ]</span>
-                    ) : isActive ? (
-                      <span style={{ color: 'var(--primary)' }}>[ RUNNING ]</span>
-                    ) : (
-                      <span style={{ color: 'var(--text-muted)' }}>[ PENDING ]</span>
-                    )}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', textAlign: 'left' }}>
+            <h4 style={{ fontSize: '15px', fontWeight: '700', color: 'var(--text-primary)', marginBottom: '10px' }}>
+              Execution Pipeline:
+            </h4>
+            {steps.map((step, idx) => (
+              <div key={idx} style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+                <span style={{ color: 'var(--primary)', fontWeight: 'bold', fontSize: '14px', marginTop: '1px' }}>•</span>
+                <div>
+                  <div style={{ fontSize: '14px', fontWeight: '600', color: 'var(--text-primary)' }}>
+                    {step.label}
                   </div>
-                  <div>
-                    <div style={{ fontSize: '15px', fontWeight: '600', color: 'var(--text-primary)' }}>
-                      {step.label}
-                    </div>
-                    <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                      {step.desc}
-                    </div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                    {step.desc}
                   </div>
                 </div>
-              );
-            })}
+              </div>
+            ))}
           </div>
         )}
       </div>
@@ -121,5 +90,6 @@ function StatusFeed({ jobId, onAnalysisComplete }) {
 }
 
 export default StatusFeed;
+
 
 
