@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { analysisService } from '../api';
 import AgentBreakdown from './AgentBreakdown';
-import ConfidenceChart from './ConfidenceChart';
 import FrameGallery from './FrameGallery';
 
 function ResultsDashboard() {
@@ -156,20 +155,15 @@ function ResultsDashboard() {
         </div>
       </div>
 
-      {/* details grid layout */}
-      <div className="dashboard-grid">
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          <AgentBreakdown breakdown={report.agent_breakdown} isPartial={data.is_partial_analysis} />
-          <FrameGallery thumbnails={thumbnails} explanations={report.frame_level_details} />
-        </div>
-        
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          <ConfidenceChart report={report} duration={data.duration} />
-        </div>
+      {/* details layout */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', marginTop: '20px' }}>
+        <AgentBreakdown breakdown={report.agent_breakdown} isPartial={data.is_partial_analysis} />
+        <FrameGallery thumbnails={thumbnails} explanations={report.frame_level_details} />
       </div>
     </div>
   );
 }
 
 export default ResultsDashboard;
+
 
