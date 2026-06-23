@@ -67,7 +67,7 @@ def temporal_node(state: VeriFrameState) -> dict:
 
 def llm_node(state: VeriFrameState) -> dict:
     """
-    node for running gemini vision model on suspicious frames.
+    node for running LLM vision model (Llama 3.2 via Groq) on suspicious frames.
     """
     frames = state.get("frames", [])
     visual_flagged = state.get("visual_flagged_frames", [])
@@ -78,8 +78,8 @@ def llm_node(state: VeriFrameState) -> dict:
         # merge and pick the most suspicious frames (max 8)
         suspicious = llm_agent.pick_suspicious_frames(visual_flagged, temporal_flagged, frames)
         
-        # analyze using gemini 2.5 flash
-        reasoning, explanations, score = llm_agent.analyze_with_gemini(suspicious)
+        # analyze using Llama 3.2 Vision on Groq
+        reasoning, explanations, score = llm_agent.analyze_with_llm(suspicious)
         status["llm"] = "success"
         
         return {
@@ -93,7 +93,7 @@ def llm_node(state: VeriFrameState) -> dict:
         status["llm"] = "failed"
         return {
             "llm_score": 0.0,
-            "llm_reasoning": f"gemini analysis failed: {e}",
+            "llm_reasoning": f"LLM analysis failed: {e}",
             "frame_explanations": {},
             "agent_status": status
         }
