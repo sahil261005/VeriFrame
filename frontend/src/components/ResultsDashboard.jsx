@@ -72,6 +72,20 @@ function ResultsDashboard() {
   const report = data.report || {};
   const thumbnails = data.thumbnails || [];
   const confidencePercent = (data.confidence * 100).toFixed(0);
+  const metadata = report.video_metadata || {};
+  const robustnessScore = metadata.robustness_score || 1.0;
+  
+  const getRobustnessLabel = (score) => {
+    if (score >= 0.8) return 'High';
+    if (score >= 0.5) return 'Medium';
+    return 'Low (Susceptible)';
+  };
+
+  const getRobustnessColor = (score) => {
+    if (score >= 0.8) return 'var(--success)';
+    if (score >= 0.5) return 'var(--warning)';
+    return 'var(--danger)';
+  };
 
   // verdict selection badge helper
   const getVerdictBadge = () => {
@@ -115,12 +129,25 @@ function ResultsDashboard() {
                 {data.video_filename}
               </h2>
             </div>
-            <div style={{ display: 'flex', gap: '16px', fontSize: '12px', color: 'var(--text-muted)' }}>
+            <div style={{ display: 'flex', gap: '16px', fontSize: '12px', color: 'var(--text-muted)', flexWrap: 'wrap' }}>
               <span>
                 Scanned: {new Date(data.created_at).toLocaleDateString()}
               </span>
+              <span>•</span>
               <span>
                 Duration: {data.duration.toFixed(2)}s
+              </span>
+              {metadata.width && (
+                <>
+                  <span>•</span>
+                  <span>
+                    Resolution: {metadata.width}x{metadata.height}
+                  </span>
+                </>
+              )}
+              <span>•</span>
+              <span>
+                Robustness: <strong style={{ color: getRobustnessColor(robustnessScore) }}>{robustnessScore.toFixed(2)} ({getRobustnessLabel(robustnessScore)})</strong>
               </span>
             </div>
           </div>
@@ -155,6 +182,8 @@ function ResultsDashboard() {
         </div>
       </div>
 
+
+ 
       {/* details layout */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', marginTop: '20px' }}>
         <AgentBreakdown breakdown={report.agent_breakdown} isPartial={data.is_partial_analysis} />

@@ -40,7 +40,7 @@ def analyze_with_llm(suspicious_frames):
 
     client = Groq(api_key=api_key)
     frame_explanations = {}
-    total_fake_conf = 0.0
+    scores_list = []
     num_analyzed = 0
 
     for f in suspicious_frames:
@@ -57,11 +57,9 @@ def analyze_with_llm(suspicious_frames):
         base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
 
         prompt = (
-            "You are a forensic video expert. Analyze this frame from a video for deepfake manipulation. "
-            "Look for: lighting inconsistencies, unnatural blending around boundaries (face, hair, eyes), "
-            "shadow direction mismatches, or skin texture anomalies. "
-            "Reply in 2 sentences max. Start your response with a rating in this format: [SCORE: X.XX] "
-            "where X.XX is your confidence that this image is fake (0.00 is authentic, 1.00 is manipulated)."
+            "You are a forensic video expert. Analyze this frame from a video for AI generation (e.g., from tools like Sora, Runway, Pika, Synthesia) or deepfake manipulation.\n"
+            "Look closely for: structural distortions, physics violations, temporal morphing/blending artifacts, lighting/shadow mismatches, flat/plasticky textures, or face/eye inconsistencies.\n"
+            "CRITICAL requirement: You MUST start your response with a rating in this exact format: [SCORE: X.XX] (e.g., [SCORE: 0.90]) where X.XX is your confidence that this frame is synthetic/AI-generated or manipulated (0.00 is authentic camera footage, 1.00 is fully AI-generated/fake). Then, provide your maximum 2-sentence explanation."
         )
 
         response = client.chat.completions.create(
@@ -86,19 +84,45 @@ def analyze_with_llm(suspicious_frames):
         score = 0.1
         explanation = response_text
 
-        if "[SCORE:" in response_text:
-            parts = response_text.split("[SCORE:")
-            score_part = parts[1].split("]")[0].strip()
-            score = float(score_part)
-            explanation = parts[0] + parts[1].split("]")[1]
-            explanation = explanation.strip()
+        # Use regex to find [SCORE: X.XX] or SCORE: X.XX (case insensitive)
+        import re
+        match = re.search(r'\[?SCORE:\s*([0-9.]+)(?:/1\.0)?\]?', response_text, re.IGNORECASE)
+        if match:
+            try:
+                score = float(match.group(1))
+                # Remove the score prefix from the explanation to clean it up
+                explanation = re.sub(r'\[?SCORE:\s*[0-9.]+(?:/1\.0)?\]?', '', response_text, flags=re.IGNORECASE).strip()
+            except Exception:
+                pass
+        else:
+            # Fallback: Look for any standalone decimal number between 0.0 and 1.0 in the response text
+            numbers = re.findall(r'\b0\.[0-9]+\b|\b1\.0\b', response_text)
+            if numbers:
+                try:
+                    score = float(numbers[0])
+                except Exception:
+                    pass
+            else:
+                # Heuristic: Check text keywords to make a guess if the score is missing
+                text_lower = response_text.lower()
+                if any(word in text_lower for word in ["manipulated", "fake", "ai-generated", "synthetic", "deepfake", "distortions", "artifacts"]):
+                    score = 0.85
+                elif "authentic" in text_lower or "real" in text_lower:
+                    score = 0.05
 
         ts_str = str(ts)
         frame_explanations[ts_str] = explanation
-        total_fake_conf += score
+        scores_list.append(score)
         num_analyzed += 1
 
-    llm_score = total_fake_conf / num_analyzed if num_analyzed > 0 else 0.0
-    llm_reasoning = f"Groq analyzed {num_analyzed} frames. Average confidence: {round(llm_score, 2)}"
+    # Average the top 3 highest scores to avoid hiding manipulation in long authentic sections
+    if num_analyzed > 0:
+        sorted_scores = sorted(scores_list, reverse=True)
+        top_scores = sorted_scores[:3]
+        llm_score = sum(top_scores) / len(top_scores)
+    else:
+        llm_score = 0.0
+
+    llm_reasoning = f"Groq analyzed {num_analyzed} frames. Top 3 frame average confidence: {round(llm_score, 2)}"
 
     return llm_reasoning, frame_explanations, round(llm_score, 4)

@@ -4,12 +4,26 @@ import base64
 import json
 from datetime import datetime
 from typing import List
+import logging
+from dotenv import load_dotenv
 
-from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile, BackgroundTasks
+load_dotenv()
+
+# Configure simple logging for the application
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 import config
 import database
@@ -24,12 +38,22 @@ import cv2
 # initialize database tables on startup
 database.create_tables()
 
+limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="VeriFrame API", description="Multi-agent deepfake detection platform")
+app.state.limiter = limiter
+
+@app.exception_handler(RateLimitExceeded)
+def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail="Rate limit exceeded. You can only scan up to 5 videos per minute."
+    )
+
 
 # CORS middleware configuration for local testing
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=config.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -95,26 +119,26 @@ def process_video_task(job_id: str, temp_path: str, meta: dict):
     db = database.SessionLocal()
     downscaled_path = None
     try:
-        print(f"background processing started for job {job_id}...")
+        logger.info(f"background processing started for job {job_id}...")
         
         # 1. downscale video to 480p to keep processing efficient
         downscaled_path = os.path.join(config.UPLOAD_DIR, f"downscaled_{job_id}.mp4")
         preprocessing.downscale_video(temp_path, downscaled_path)
-        print(f"video downscaled for job {job_id}.")
+        logger.info(f"video downscaled for job {job_id}.")
         
         # 2. extract frames every 0.5 seconds
         # we extract at 0.5s intervals so the agents have enough resolution to track inconsistencies
         frames = preprocessing.extract_frames(downscaled_path, interval=0.5)
-        print(f"extracted {len(frames)} frames for job {job_id}.")
+        logger.info(f"extracted {len(frames)} frames for job {job_id}.")
         
         # 3. run langgraph multi-agent pipeline
         pipeline_output = run_pipeline(frames, meta)
-        print(f"langgraph pipeline completed for job {job_id}.")
+        logger.info(f"langgraph pipeline completed for job {job_id}.")
         
         # 4. load job to save outputs
         job = db.query(models.AnalysisJob).filter(models.AnalysisJob.id == job_id).first()
         if not job:
-            print(f"error: job {job_id} not found in database.")
+            logger.error(f"error: job {job_id} not found in database.")
             return
 
         # 5. extract and build thumbnails for flagged suspicious frames
@@ -159,10 +183,10 @@ def process_video_task(job_id: str, temp_path: str, meta: dict):
         job.flagged_frame_thumbnails = json.dumps(thumbnails_list)
         
         db.commit()
-        print(f"job {job_id} saved successfully.")
+        logger.info(f"job {job_id} saved successfully.")
 
     except Exception as e:
-        print(f"error processing video for job {job_id}: {e}")
+        logger.error(f"error processing video for job {job_id}: {e}", exc_info=True)
         # update job status to failed
         try:
             job = db.query(models.AnalysisJob).filter(models.AnalysisJob.id == job_id).first()
@@ -171,7 +195,7 @@ def process_video_task(job_id: str, temp_path: str, meta: dict):
                 job.completed_at = datetime.utcnow()
                 db.commit()
         except Exception as db_err:
-            print(f"failed to update job error status: {db_err}")
+            logger.error(f"failed to update job error status: {db_err}", exc_info=True)
             
     finally:
         db.close()
@@ -180,17 +204,19 @@ def process_video_task(job_id: str, temp_path: str, meta: dict):
             try:
                 os.remove(temp_path)
             except Exception as e:
-                print(f"error removing temp video {temp_path}: {e}")
+                logger.error(f"error removing temp video {temp_path}: {e}")
                 
         if downscaled_path and os.path.exists(downscaled_path):
             try:
                 os.remove(downscaled_path)
             except Exception as e:
-                print(f"error removing downscaled video {downscaled_path}: {e}")
+                logger.error(f"error removing downscaled video {downscaled_path}: {e}")
 
 
 @app.post("/upload", response_model=schemas.JobStatusResponse)
+@limiter.limit("5/minute")
 def upload_video(
+    request: Request,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     db: Session = Depends(database.get_db),

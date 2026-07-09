@@ -3,80 +3,100 @@ import subprocess
 import shutil
 import re
 import json
+import logging
 import numpy as np
 import cv2
 
+logger = logging.getLogger(__name__)
+
+
+# real cameras have sensor noise but AI generated frames are usually super clean and smooth
+def compute_noise_residual(frame):
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+    residual = gray.astype(np.float32) - blurred.astype(np.float32)
+    return float(np.var(residual))
+
+
 def check_provenance(file_path):
-    filename = os.path.basename(file_path).lower()
-    
-    is_camera = False
-    if re.search(r'(vid|img|pxl|dji|dsc|gopr|mov)_\d+', filename) or re.search(r'^\d{8}_\d{6}', filename):
-        is_camera = True
-                
-    is_social = False
-    for platform in ["whatsapp", "snapchat", "tiktok", "facebook", "instagram", "telegram"]:
-        if platform in filename:
-            is_social = True
-            break
-    
+    # set up default values
+    provenance_score = 0.5
+    c2pa_compliant = False
     encoder = "unknown"
     metadata_stripped = True
-    c2pa_compliant = False
-    
-    if shutil.which("ffprobe"):
+    is_camera_filename = False
+    is_social_filename = False
+
+    # get filename in lowercase to check patterns
+    filename = os.path.basename(file_path).lower()
+
+    # check if it looks like a camera name
+    if filename.startswith("dji_") or filename.startswith("gopr") or filename.startswith("pxl_") or filename.startswith("img_") or filename.startswith("vid_") or filename.startswith("dscf"):
+        is_camera_filename = True
+        provenance_score = 0.85
+    # check if it looks like a social media filename
+    elif "whatsapp" in filename or "tiktok" in filename or "snapchat" in filename or "instagram" in filename or "telegram" in filename or "facebook" in filename:
+        is_social_filename = True
+        provenance_score = 0.70
+
+    # run ffprobe to see if we can find metadata
+    ffprobe_path = shutil.which("ffprobe")
+    if ffprobe_path:
         try:
-            cmd = [
-                "ffprobe", "-v", "quiet", "-print_format", "json",
-                "-show_format", "-show_streams", file_path
-            ]
+            cmd = ["ffprobe", "-v", "quiet", "-show_format", "-show_streams", file_path]
             result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            if result.returncode == 0:
-                data = json.loads(result.stdout)
-                format_tags = data.get("format", {}).get("tags", {})
-                if format_tags:
-                    encoder = format_tags.get("encoder", "unknown").lower()
-                    metadata_stripped = False
-                    
-                    for k, v in format_tags.items():
-                        k_lower = str(k).lower()
-                        v_lower = str(v).lower()
-                        if "c2pa" in k_lower or "jumb" in k_lower or "provenance" in k_lower or "c2pa" in v_lower:
-                            c2pa_compliant = True
-                            break
+            output = result.stdout.lower()
+
+            # if we find encoder in output, it means metadata is there
+            if "encoder" in output:
+                metadata_stripped = False
+                # find the encoder line and extract name
+                for line in output.split("\n"):
+                    if "encoder=" in line:
+                        parts = line.split("encoder=")
+                        if len(parts) > 1:
+                            encoder = parts[1].strip()
+                        break
+
+            # check for c2pa keywords in output
+            if "c2pa" in output or "jumb" in output or "provenance" in output:
+                c2pa_compliant = True
+                provenance_score = 0.98
+                metadata_stripped = False
+
         except Exception as e:
-            print(f"debug: error running ffprobe for provenance check: {e}")
-            
-    provenance_score = 0.5
-    if c2pa_compliant:
-        provenance_score = 0.98
-    elif is_camera:
-        provenance_score = 0.8
-        if encoder != "unknown" and not metadata_stripped:
-            provenance_score = 0.95
-    elif is_social:
-        provenance_score = 0.7
-    elif metadata_stripped or encoder == "unknown":
-        provenance_score = 0.3
-        
+            logger.error(f"Error running ffprobe: {e}")
+    else:
+        logger.warning("ffprobe not found, skipping container checks")
+
+    # if metadata is gone and it is not a camera/social name, it is low trust
+    if metadata_stripped:
+        if not is_camera_filename and not is_social_filename:
+            provenance_score = 0.30
+
     return {
         "provenance_score": provenance_score,
-        "is_camera_filename": is_camera,
-        "is_social_filename": is_social,
+        "c2pa_compliant": c2pa_compliant,
         "encoder": encoder,
         "metadata_stripped": metadata_stripped,
-        "c2pa_compliant": c2pa_compliant
+        "is_camera_filename": is_camera_filename,
+        "is_social_filename": is_social_filename
     }
 
+
+# get basic metadata from opencv. we need this to validate and show on frontend later
 def get_video_metadata(file_path):
     cap = cv2.VideoCapture(file_path)
     if not cap.isOpened():
         raise ValueError("could not open video file to read metadata")
     
+    # query the properties we need
     fps = cap.get(cv2.CAP_PROP_FPS)
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
+    # convert the binary fourcc code to a readable string
     fourcc = int(cap.get(cv2.CAP_PROP_FOURCC))
     codec = ""
     for i in range(4):
@@ -88,16 +108,22 @@ def get_video_metadata(file_path):
         
     cap.release()
     
+    # opencv doesnt give bitrate directly so we do it by hand
     bitrate = 0
     try:
         file_size = os.path.getsize(file_path)
         if duration > 0:
+            # file size in bits / duration in seconds
             bitrate = int((file_size * 8) / duration)
     except Exception:
+        # just set it to 0 if it fails
         pass
         
+    # run our metadata checks
     provenance = check_provenance(file_path)
     
+    # calculate adversarial robustness score based on resolution and bitrate thresholds
+    # low-resolution and low-bitrate streams make it easy to hide manipulation signatures
     robustness = 1.0
     
     if width < 1280 or height < 720:
@@ -125,21 +151,27 @@ def get_video_metadata(file_path):
         "provenance": provenance
     }
 
+# basic validation. we check if it exists, format is ok, and length is under 30s.
+# we dont want people uploading massive movies and crashing the server
 def validate_video(file_path):
     if not os.path.exists(file_path):
         raise ValueError("video file does not exist")
         
+    # check extension is supported
     ext = os.path.splitext(file_path)[1].lower().replace(".", "")
     allowed = ["mp4", "avi", "mov", "webm"]
     if ext not in allowed:
         raise ValueError(f"unsupported format: {ext}. we only support mp4, avi, mov, webm")
         
+    # get metadata and check duration
     meta = get_video_metadata(file_path)
     if meta["duration"] > 30.0:
         raise ValueError(f"video duration is {meta['duration']}s, which exceeds the 30-second limit")
         
     return meta
 
+# downscales to 480p so we save bandwidth and processing power.
+# keeps aspect ratio same
 def downscale_video(file_path, output_path, target_height=480):
     cap = cv2.VideoCapture(file_path)
     if not cap.isOpened():
@@ -149,20 +181,26 @@ def downscale_video(file_path, output_path, target_height=480):
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     
+    # dont upscale it if its already smaller than 480p
     if height <= target_height:
+        # write with original size
         new_height = height
         new_width = width
     else:
+        # compute width based on height
         aspect = width / height
         new_height = target_height
         new_width = int(target_height * aspect)
         
+        # make sure width is even or encoders will crash
         if new_width % 2 != 0:
             new_width += 1
             
+    # mp4v works everywhere so we use it
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_path, fourcc, fps, (new_width, new_height))
     
+    # loop frames, resize them, and write
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -174,6 +212,8 @@ def downscale_video(file_path, output_path, target_height=480):
     out.release()
     return output_path
 
+# extract frames every X seconds. does not write to disk so its fast.
+# returns dicts with timestamp, index, and numpy array
 def extract_frames(file_path, interval=0.5):
     cap = cv2.VideoCapture(file_path)
     if not cap.isOpened():
@@ -181,8 +221,10 @@ def extract_frames(file_path, interval=0.5):
         
     fps = cap.get(cv2.CAP_PROP_FPS)
     if fps <= 0:
+        # fallback if fps is broken
         fps = 30.0
         
+    # how many frames to skip
     frame_skip = max(1, int(fps * interval))
     
     frames = []
@@ -193,6 +235,7 @@ def extract_frames(file_path, interval=0.5):
         if not ret:
             break
             
+        # pull the frame if its on the interval skip
         if frame_idx % frame_skip == 0:
             timestamp = frame_idx / fps
             noise_var = compute_noise_residual(frame)
@@ -207,11 +250,14 @@ def extract_frames(file_path, interval=0.5):
     cap.release()
     return frames
 
+# extract audio using ffmpeg. returns file path or None if it fails.
 def extract_audio(file_path, output_path):
+    # check if ffmpeg is installed
     if not shutil.which("ffmpeg"):
-        print("warning: ffmpeg command not found. skipping audio extraction.")
+        logger.warning("ffmpeg command not found. skipping audio extraction.")
         return None
         
+    # -y = overwrite, -vn = no video, acodec mp3 = encode to mp3
     cmd = [
         "ffmpeg", "-y", "-i", file_path,
         "-vn",
@@ -219,15 +265,17 @@ def extract_audio(file_path, output_path):
         output_path
     ]
     
+    # if wav format is requested
     if output_path.endswith(".wav"):
         cmd = ["ffmpeg", "-y", "-i", file_path, "-vn", output_path]
         
     try:
+        # hide log spam unless we need it
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if result.returncode != 0:
-            print(f"ffmpeg extraction failed (maybe no audio track present): {result.stderr}")
+            logger.error(f"ffmpeg extraction failed (maybe no audio track present): {result.stderr}")
             return None
         return output_path
     except Exception as e:
-        print(f"failed to execute ffmpeg subprocess: {e}")
+        logger.error(f"failed to execute ffmpeg subprocess: {e}", exc_info=True)
         return None

@@ -101,7 +101,8 @@ def build_report(state):
                 "is_social_filename": provenance.get("is_social_filename", False)
             }
         },
-        "frame_level_details": state.get("frame_explanations", {})
+        "frame_level_details": state.get("frame_explanations", {}),
+        "visual_per_frame": state.get("visual_per_frame", [])
     }
 
     return report

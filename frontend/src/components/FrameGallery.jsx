@@ -22,8 +22,9 @@ function FrameGallery({ thumbnails, explanations }) {
         gap: '12px'
       }}>
         {thumbnails.map((item, idx) => {
-          const tsStr = String(item.timestamp);
-          const explanation = explanations?.[tsStr] || "No detailed forensic analysis available for this frame.";
+          const tsVal = Number(item.timestamp);
+          const matchedKey = Object.keys(explanations || {}).find(key => Number(key) === tsVal);
+          const explanation = matchedKey ? explanations[matchedKey] : "No detailed forensic analysis available for this frame.";
 
           return (
             <div 

@@ -1,12 +1,12 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, EmailStr
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
 
 # schemas for registration and login
 class RegisterRequest(BaseModel):
-    email: str
-    password: str
+    email: EmailStr
+    password: str = Field(..., min_length=6)
 
 
 class LoginRequest(BaseModel):

@@ -24,51 +24,86 @@ function Login() {
   };
 
   return (
-    <div style={{ maxWidth: '400px', width: '100%', margin: '80px auto 0 auto' }}>
-      <div className="card">
-        <h2 style={{ fontSize: '24px', fontWeight: '700', marginBottom: '20px', textAlign: 'center' }}>
-          Welcome Back
-        </h2>
-        {error && (
-          <div style={{ padding: '12px', borderRadius: '6px', backgroundColor: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)', color: '#ef4444', fontSize: '14px', marginBottom: '20px' }}>
-            {error}
-          </div>
-        )}
-        <form onSubmit={handleSubmit}>
-          <div className="form-group">
-            <label className="form-label">Email Address</label>
-            <div>
-              <input
-                type="email"
-                className="form-input"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-              />
-            </div>
-          </div>
-          <div className="form-group">
-            <label className="form-label">Password</label>
-            <div>
-              <input
-                type="password"
-                className="form-input"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
-            </div>
-          </div>
-          <button type="submit" className="btn" style={{ width: '100%', marginTop: '10px' }} disabled={loading}>
-            {loading ? 'Logging in...' : 'Login'}
-          </button>
-        </form>
-        <p style={{ textAlign: 'center', marginTop: '20px', fontSize: '14px', color: 'var(--text-secondary)' }}>
-          Don't have an account?{' '}
-          <Link to="/register" style={{ color: 'var(--primary)', textDecoration: 'none', fontWeight: '500' }}>
-            Register here
-          </Link>
+    <div className="auth-split-layout">
+      <div className="auth-info-side">
+        <h1 className="auth-tagline">
+          Multi-Agent Deepfake & Video Manipulation Detection
+        </h1>
+        <p className="auth-description">
+          An advanced, cooperative multi-agent platform designed to detect deepfakes, face mesh discrepancies, and temporal sequence inconsistencies.
         </p>
+        
+        <div className="auth-feature-list">
+          <div className="auth-feature-item">
+            <span className="auth-feature-icon">1</span>
+            <div className="auth-feature-text">
+              <div className="auth-feature-title">Visual Analysis Agent</div>
+              Spatial frame checking utilizing deep learning classification models and high-frequency noise variance.
+            </div>
+          </div>
+          <div className="auth-feature-item">
+            <span className="auth-feature-icon">2</span>
+            <div className="auth-feature-text">
+              <div className="auth-feature-title">Temporal Analysis Agent</div>
+              Tracks optical flow anomalies and matches facial landmarks dynamically to detect face-swaps.
+            </div>
+          </div>
+          <div className="auth-feature-item">
+            <span className="auth-feature-icon">3</span>
+            <div className="auth-feature-text">
+              <div className="auth-feature-title">Cognitive Reasoning Agent</div>
+              Llama 4 Scout evaluates flagged frames, explaining precisely why a sample is suspect.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="auth-card-side">
+        <div className="card">
+          <h2 style={{ fontSize: '24px', fontWeight: '700', marginBottom: '20px', textAlign: 'center' }}>
+            Welcome Back
+          </h2>
+          {error && (
+            <div style={{ padding: '12px', borderRadius: '6px', backgroundColor: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)', color: '#ef4444', fontSize: '14px', marginBottom: '20px' }}>
+              {error}
+            </div>
+          )}
+          <form onSubmit={handleSubmit}>
+            <div className="form-group">
+              <label className="form-label">Email Address</label>
+              <div>
+                <input
+                  type="email"
+                  className="form-input"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                />
+              </div>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Password</label>
+              <div>
+                <input
+                  type="password"
+                  className="form-input"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                />
+              </div>
+            </div>
+            <button type="submit" className="btn" style={{ width: '100%', marginTop: '10px' }} disabled={loading}>
+              {loading ? 'Logging in...' : 'Login'}
+            </button>
+          </form>
+          <p style={{ textAlign: 'center', marginTop: '20px', fontSize: '14px', color: 'var(--text-secondary)' }}>
+            Don't have an account?{' '}
+            <Link to="/register" style={{ color: 'var(--primary)', textDecoration: 'none', fontWeight: '500' }}>
+              Register here
+            </Link>
+          </p>
+        </div>
       </div>
     </div>
   );

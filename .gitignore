@@ -30,3 +30,13 @@ Thumbs.db
 # Databases & local run uploads
 *.db
 backend/temp_uploads/
+
+# Scratch & test scripts
+backend/test_groq.py
+README.md
+resume_project_summary.md
+backend/download.py
+
+# Test data & evaluation folders
+backend/test_data/
+backend/temp_eval/

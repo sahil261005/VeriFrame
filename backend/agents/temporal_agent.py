@@ -1,6 +1,9 @@
 import cv2
 import numpy as np
 import math
+import logging
+
+logger = logging.getLogger(__name__)
 
 # try to load mediapipe, print warning but dont crash if not installed
 try:
@@ -8,7 +11,7 @@ try:
     MEDIAPIPE_AVAILABLE = True
 except ImportError:
     MEDIAPIPE_AVAILABLE = False
-    print("warning: mediapipe not installed, face consistency checks will be skipped")
+    logger.warning("mediapipe not installed, face consistency checks will be skipped")
 
 
 def compute_optical_flow(frames):
@@ -68,7 +71,7 @@ def check_face_consistency(frames):
     # track facial landmarks over time.
     # if landmarks jump around too much, it means the face mesh is glitching
     if not MEDIAPIPE_AVAILABLE:
-        print("skipping face consistency (mediapipe not available)")
+        logger.info("skipping face consistency (mediapipe not available)")
         return []
 
     if len(frames) < 2:
@@ -120,7 +123,7 @@ def check_face_consistency(frames):
             faces_found += 1
 
     if faces_found < 2:
-        print(f"only found faces in {faces_found} frames, not enough for consistency check")
+        logger.info(f"only found faces in {faces_found} frames, not enough for consistency check")
         return []
 
     # compare face landmarks between consecutive frames
@@ -160,10 +163,10 @@ def check_face_consistency(frames):
 
 def run_temporal_analysis(frames):
     # run optical flow and face meshes, then merge results
-    print("running optical flow analysis...")
+    logger.info("running optical flow analysis...")
     flow_results = compute_optical_flow(frames)
 
-    print("running face consistency analysis...")
+    logger.info("running face consistency analysis...")
     face_results = check_face_consistency(frames)
 
     # combine timestamps flagged by either test

@@ -1,10 +1,13 @@
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 try:
     from weasyprint import HTML
     WEASYPRINT_AVAILABLE = True
 except Exception as err:
-    print(f"warning: weasyprint could not be imported: {err}. falling back to plain html report.")
+    logger.warning(f"weasyprint could not be imported: {err}. falling back to plain html report.")
     WEASYPRINT_AVAILABLE = False
 
 
@@ -130,6 +133,10 @@ def generate_pdf(report_dict: dict) -> bytes:
                     <td>{report_dict.get('video_metadata', {}).get('fps', 0.0):.1f} / {report_dict.get('video_metadata', {}).get('frame_count', 0)} frames</td>
                 </tr>
                 <tr>
+                    <th>Adversarial Robustness Score</th>
+                    <td>{report_dict.get('video_metadata', {}).get('robustness_score', 1.0):.2f} / 1.00</td>
+                </tr>
+                <tr>
                     <th>Partial Analysis (Failure Fallback)</th>
                     <td>{"Yes (some agents failed to run)" if report_dict.get('is_partial_analysis', False) else "No (all agents ran successfully)"}</td>
                 </tr>
@@ -159,6 +166,15 @@ def generate_pdf(report_dict: dict) -> bytes:
                 <div>Status: {report_dict.get('agent_breakdown', {}).get('llm_agent', {}).get('status', 'unknown')}</div>
                 <div>Average Fake Rating: {report_dict.get('agent_breakdown', {}).get('llm_agent', {}).get('score', 0.0):.2f}</div>
                 <div>Summary Assessment: {report_dict.get('agent_breakdown', {}).get('llm_agent', {}).get('reasoning', 'N/A')}</div>
+            </div>
+
+            <div class="agent-card">
+                <div class="agent-name">Provenance &amp; C2PA Lineage Agent</div>
+                <div>Status: {report_dict.get('agent_breakdown', {}).get('provenance_agent', {}).get('status', 'unknown')}</div>
+                <div>Provenance Score: {report_dict.get('agent_breakdown', {}).get('provenance_agent', {}).get('score', 0.5):.2f}</div>
+                <div>C2PA Compliant: {"Yes" if report_dict.get('agent_breakdown', {}).get('provenance_agent', {}).get('c2pa_compliant', False) else "No"}</div>
+                <div>Encoder: {report_dict.get('agent_breakdown', {}).get('provenance_agent', {}).get('encoder', 'unknown')}</div>
+                <div>Metadata Stripped: {"Yes" if report_dict.get('agent_breakdown', {}).get('provenance_agent', {}).get('metadata_stripped', True) else "No"}</div>
             </div>
         </div>
     """
@@ -190,7 +206,7 @@ def generate_pdf(report_dict: dict) -> bytes:
             pdf_bytes = HTML(string=html_content).write_pdf()
             return pdf_bytes
         except Exception as e:
-            print(f"error rendering PDF with weasyprint: {e}. returning raw HTML instead.")
+            logger.error(f"error rendering PDF with weasyprint: {e}. returning raw HTML instead.", exc_info=True)
             return html_content.encode("utf-8")
     else:
         # fallback to plain HTML bytes

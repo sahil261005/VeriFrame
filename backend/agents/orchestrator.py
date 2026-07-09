@@ -4,6 +4,9 @@ import agents.visual_agent as visual_agent
 import agents.temporal_agent as temporal_agent
 import agents.llm_agent as llm_agent
 import agents.synthesis_agent as synthesis_agent
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def visual_node(state: VeriFrameState) -> dict:
@@ -16,7 +19,7 @@ def visual_node(state: VeriFrameState) -> dict:
     try:
         pipe = visual_agent.load_model()
         score, flagged, all_results = visual_agent.analyze_frames(frames, pipe)
-        status["visual"] = "success"
+        status["visual"] = "success" if pipe != "fallback" else "fallback"
         
         return {
             "visual_score": score,
@@ -25,7 +28,7 @@ def visual_node(state: VeriFrameState) -> dict:
             "agent_status": status
         }
     except Exception as e:
-        print(f"error in visual node: {e}")
+        logger.error(f"error in visual node: {e}", exc_info=True)
         status["visual"] = "failed"
         return {
             "visual_score": 0.0,
@@ -54,7 +57,7 @@ def temporal_node(state: VeriFrameState) -> dict:
             "agent_status": status
         }
     except Exception as e:
-        print(f"error in temporal node: {e}")
+        logger.error(f"error in temporal node: {e}", exc_info=True)
         status["temporal"] = "failed"
         return {
             "temporal_score": 0.0,
@@ -89,7 +92,7 @@ def llm_node(state: VeriFrameState) -> dict:
             "agent_status": status
         }
     except Exception as e:
-        print(f"error in llm node: {e}")
+        logger.error(f"error in llm node: {e}", exc_info=True)
         status["llm"] = "failed"
         return {
             "llm_score": 0.0,
@@ -110,8 +113,9 @@ def synthesis_node(state: VeriFrameState) -> dict:
     
     try:
         # compute weighted score and final verdict
+        metadata = state.get("metadata", {})
         verdict, confidence, normalized_weights = synthesis_agent.compute_verdict(
-            visual_score, temporal_score, llm_score, status
+            visual_score, temporal_score, llm_score, status, metadata
         )
         status["synthesis"] = "success"
         
@@ -130,7 +134,7 @@ def synthesis_node(state: VeriFrameState) -> dict:
             "agent_status": status
         }
     except Exception as e:
-        print(f"error in synthesis node: {e}")
+        logger.error(f"error in synthesis node: {e}", exc_info=True)
         status["synthesis"] = "failed"
         return {
             "final_verdict": "UNCERTAIN",

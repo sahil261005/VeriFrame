@@ -17,3 +17,6 @@ UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp_uplo
 # make sure upload directory exists
 if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
+
+# CORS origins for security control
+CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "http://localhost:5173").split(",")
