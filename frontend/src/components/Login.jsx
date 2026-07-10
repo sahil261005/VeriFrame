@@ -17,7 +17,18 @@ function Login() {
       await authService.login(email, password);
       window.location.href = '/';
     } catch (err) {
-      setError(err.response?.data?.detail || 'Invalid email or password');
+      const detail = err.response?.data?.detail;
+      if (detail) {
+        if (typeof detail === 'string') {
+          setError(detail);
+        } else if (Array.isArray(detail)) {
+          setError(detail.map(e => e.msg).join(', '));
+        } else {
+          setError(JSON.stringify(detail));
+        }
+      } else {
+        setError('Invalid email or password');
+      }
     } finally {
       setLoading(false);
     }

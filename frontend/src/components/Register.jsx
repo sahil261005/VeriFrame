@@ -24,7 +24,19 @@ function Register() {
       await authService.register(email, password);
       window.location.href = '/';
     } catch (err) {
-      setError(err.response?.data?.detail || 'Registration failed. Try again.');
+      const detail = err.response?.data?.detail;
+      if (detail) {
+        if (typeof detail === 'string') {
+          setError(detail);
+        } else if (Array.isArray(detail)) {
+          // Format validation errors list cleanly
+          setError(detail.map(e => e.msg).join(', '));
+        } else {
+          setError(JSON.stringify(detail));
+        }
+      } else {
+        setError('Registration failed. Try again.');
+      }
     } finally {
       setLoading(false);
     }
