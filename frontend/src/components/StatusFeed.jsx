@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { analysisService } from '../api';
 
 function StatusFeed({ jobId, onAnalysisComplete }) {
   const [status, setStatus] = useState('processing');
   const [error, setError] = useState('');
+  const navigate = useNavigate();
 
   const steps = [
     { label: 'Decompressing and segmenting media...', desc: 'Extracting video keyframes and validating stream container.' },
@@ -23,6 +25,7 @@ function StatusFeed({ jobId, onAnalysisComplete }) {
         if (data.status === 'completed') {
           clearInterval(intervalId);
           onAnalysisComplete(jobId);
+          navigate(`/analysis/${jobId}`);
         } else if (data.status === 'failed') {
           clearInterval(intervalId);
           setError('Video analysis pipeline encountered an error.');

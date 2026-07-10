@@ -53,8 +53,6 @@ function App() {
                     jobId={activeJobId} 
                     onAnalysisComplete={(id) => {
                       setActiveJobId(null);
-                      // redirect cleanly using standard window location
-                      window.location.href = `/analysis/${id}`;
                     }} 
                   />
                 ) : (
