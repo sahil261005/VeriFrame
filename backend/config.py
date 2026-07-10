@@ -18,5 +18,6 @@ UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp_uplo
 if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
 
-# CORS origins for security control
-CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "http://localhost:5173").split(",")
+# CORS origins for security control (handles both plural 'CORS_ORIGINS' and singular 'CORS_ORIGIN' env variables)
+raw_origins = os.environ.get("CORS_ORIGINS") or os.environ.get("CORS_ORIGIN") or "http://localhost:5173"
+CORS_ORIGINS = [origin.strip().rstrip("/") for origin in raw_origins.split(",")]
