@@ -60,6 +60,12 @@ app.add_middleware(
 )
 
 
+@app.get("/health")
+def health_check():
+    """lightweight health check endpoint to keep server awake"""
+    return {"status": "ok", "service": "VeriFrame API"}
+
+
 @app.post("/auth/register", response_model=schemas.TokenResponse)
 def register(req: schemas.RegisterRequest, db: Session = Depends(database.get_db)):
     """register a new user"""
