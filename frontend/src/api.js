@@ -21,6 +21,19 @@ api.interceptors.request.use(
   }
 );
 
+// auto handle expired or invalid credentials
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401 && !window.location.pathname.includes('/login') && !window.location.pathname.includes('/register')) {
+      localStorage.removeItem('token');
+      localStorage.removeItem('user_email');
+      window.location.href = '/login';
+    }
+    return Promise.reject(error);
+  }
+);
+
 // api service calls
 export const authService = {
   async login(email, password) {
