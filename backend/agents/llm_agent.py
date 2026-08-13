@@ -1,10 +1,11 @@
 import os
 import io
 import base64
+import json
 import re
 import logging
 from PIL import Image
-from groq import Groq
+import cv2
 from agents.tools import TOOL_REGISTRY
 
 logger = logging.getLogger(__name__)
@@ -14,7 +15,6 @@ def pick_suspicious_frames(visual_flagged, temporal_flagged, all_frames, max_cou
     """
     merges timestamps flagged by visual and temporal agents, sorts them,
     and returns up to max_count matching frames from all_frames.
-    max_count is dynamic (8 by default, or 12 if router chose extended mode).
     """
     flagged_times = set()
     
@@ -94,22 +94,89 @@ def run_tools_for_frame(frame_data, all_frames=None, metadata=None):
     return tool_results, tools_called
 
 
-def analyze_with_llm(suspicious_frames, reflection_prompt="", metadata=None, all_frames=None):
+def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, all_frames=None, api_key=None):
     """
-    analyzes suspicious frames using Llama 3.2 Vision on Groq,
-    enriched with ReAct tool observations and handling reflection feedback.
+    Analyzes multiple frames at once using Google Gemini 2.5 Flash with native multi-image context & JSON schema.
     """
-    if not suspicious_frames:
-        return "No suspicious frames flagged for analysis", {}, 0.0, []
+    from google import genai
+    from google.genai import types
 
-    api_key = os.environ.get("GROQ_API_KEY")
-    if not api_key:
-        frame_explanations = {}
-        for f in suspicious_frames:
-            ts_str = str(round(f["timestamp"], 3))
-            frame_explanations[ts_str] = "Analysis skipped (no GROQ_API_KEY set)."
-        return "Groq analysis skipped because GROQ_API_KEY is missing", frame_explanations, 0.0, []
+    client = genai.Client(api_key=api_key)
+    contents = []
+    tool_summaries = []
+    all_tools_used = set()
 
+    for idx, f in enumerate(suspicious_frames):
+        ts = round(f["timestamp"], 3)
+        tool_results, tools_called = run_tools_for_frame(f, all_frames=all_frames, metadata=metadata)
+        all_tools_used.update(tools_called)
+
+        # Convert frame to PIL image
+        rgb = cv2.cvtColor(f["image"], cv2.COLOR_BGR2RGB)
+        pil_img = Image.fromarray(rgb)
+
+        obs_text = f"Frame #{idx + 1} (timestamp: {ts}s):"
+        for t_name, res in tool_results.items():
+            if "summary" in res:
+                obs_text += f"\n  - Tool [{res.get('tool', t_name)}]: {res['summary']}"
+        tool_summaries.append(obs_text)
+
+        contents.append(f"=== Frame #{idx + 1} at timestamp {ts}s ===")
+        contents.append(pil_img)
+
+    system_prompt = (
+        "You are an expert video forensics analyst operating in a ReAct multi-agent framework.\n"
+        "Examine the attached chronological video keyframes for AI generation (Sora, Runway, Pika, Kling) or deepfake face manipulation.\n\n"
+        "Forensic Tool Observations:\n" + "\n\n".join(tool_summaries) + "\n\n"
+    )
+
+    if reflection_prompt:
+        system_prompt += f"\n{reflection_prompt}\n"
+
+    system_prompt += (
+        "\nProvide your analysis as a JSON object with this exact structure:\n"
+        "{\n"
+        '  "overall_fake_score": <float between 0.0 (authentic) and 1.0 (manipulated)>,\n'
+        '  "summary_reasoning": "<2-3 sentence overview explaining why the video is authentic or manipulated>",\n'
+        '  "frame_explanations": {\n'
+        '     "<timestamp_as_string>": "<1-2 sentence forensic observation for this specific frame>"\n'
+        "  }\n"
+        "}"
+    )
+
+    contents.insert(0, system_prompt)
+
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=contents,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.1
+            )
+        )
+
+        data = json.loads(response.text)
+        overall_score = float(data.get("overall_fake_score", 0.1))
+        summary_reasoning = data.get("summary_reasoning", "Gemini analysis completed.")
+        frame_explanations = data.get("frame_explanations", {})
+
+        tools_list = sorted(list(all_tools_used))
+        reasoning = f"Gemini 2.5 Flash batch-analyzed {len(suspicious_frames)} frames (Tools: {', '.join(tools_list)}): {summary_reasoning}"
+
+        return reasoning, frame_explanations, round(overall_score, 4), tools_list
+
+    except Exception as e:
+        logger.error(f"Gemini API error: {e}")
+        # fallback to Groq if Gemini throws an error
+        return None
+
+
+def analyze_with_groq(suspicious_frames, reflection_prompt="", metadata=None, all_frames=None, api_key=None):
+    """
+    Fallback analyzer using Groq Llama 3.2 Vision
+    """
+    from groq import Groq
     client = Groq(api_key=api_key)
     frame_explanations = {}
     scores_list = []
@@ -120,20 +187,16 @@ def analyze_with_llm(suspicious_frames, reflection_prompt="", metadata=None, all
         ts = round(f["timestamp"], 3)
         img_array = f["image"]
 
-        # Run ReAct tools first to gather empirical evidence for prompt context
         tool_results, tools_called = run_tools_for_frame(f, all_frames=all_frames, metadata=metadata)
         all_tools_used.update(tools_called)
 
-        # Convert BGR to RGB and PIL Image
-        rgb = img_array[:, :, ::-1]
+        rgb = cv2.cvtColor(img_array, cv2.COLOR_BGR2RGB)
         pil_img = Image.fromarray(rgb)
 
-        # Convert PIL Image to base64 jpeg
         buffered = io.BytesIO()
         pil_img.save(buffered, format="JPEG")
         base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
 
-        # Build prompt incorporating tool observations and reflection feedback
         tool_obs_text = ""
         for tool_key, res in tool_results.items():
             if "summary" in res:
@@ -141,18 +204,14 @@ def analyze_with_llm(suspicious_frames, reflection_prompt="", metadata=None, all
 
         prompt = (
             "You are a forensic video expert operating in a ReAct multi-agent framework.\n"
-            "Analyze this frame from a video for AI generation (e.g. Sora, Runway, Pika, Synthesia) or deepfake manipulation.\n"
-            f"Automated Forensic Tool Observations:{tool_obs_text}\n\n"
-            "Look closely for: structural distortions, physics violations, temporal morphing artifacts, lighting/shadow mismatches, flat/plasticky textures, or facial inconsistencies.\n"
+            "Analyze this frame for AI generation or deepfake manipulation.\n"
+            f"Automated Tool Observations:{tool_obs_text}\n"
         )
-
         if reflection_prompt:
             prompt += f"\n{reflection_prompt}\n"
-
         prompt += (
-            "CRITICAL requirement: You MUST start your response with a rating in this exact format: [SCORE: X.XX] "
-            "(e.g., [SCORE: 0.90]) where X.XX is your confidence that this frame is synthetic/AI-generated or manipulated "
-            "(0.00 is authentic camera footage, 1.00 is fully AI-generated/fake). Then, provide your maximum 2-sentence explanation."
+            "\nCRITICAL requirement: Start your response with: [SCORE: X.XX] "
+            "(0.00 is authentic, 1.00 is fully AI-generated/fake). Then, give a 2-sentence explanation."
         )
 
         try:
@@ -163,22 +222,15 @@ def analyze_with_llm(suspicious_frames, reflection_prompt="", metadata=None, all
                         "role": "user",
                         "content": [
                             {"type": "text", "text": prompt},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/jpeg;base64,{base64_image}",
-                                },
-                            },
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}},
                         ],
                     }
                 ],
             )
-
             response_text = response.choices[0].message.content or ""
             score = 0.1
             explanation = response_text
 
-            # Parse score via regex
             match = re.search(r'\[?SCORE:\s*([0-9.]+)(?:/1\.0)?\]?', response_text, re.IGNORECASE)
             if match:
                 try:
@@ -186,31 +238,14 @@ def analyze_with_llm(suspicious_frames, reflection_prompt="", metadata=None, all
                     explanation = re.sub(r'\[?SCORE:\s*[0-9.]+(?:/1\.0)?\]?', '', response_text, flags=re.IGNORECASE).strip()
                 except Exception:
                     pass
-            else:
-                numbers = re.findall(r'\b0\.[0-9]+\b|\b1\.0\b', response_text)
-                if numbers:
-                    try:
-                        score = float(numbers[0])
-                    except Exception:
-                        pass
-                else:
-                    text_lower = response_text.lower()
-                    if any(word in text_lower for word in ["manipulated", "fake", "ai-generated", "synthetic", "deepfake", "distortions"]):
-                        score = 0.85
-                    elif "authentic" in text_lower or "real" in text_lower:
-                        score = 0.05
 
             ts_str = str(ts)
             frame_explanations[ts_str] = explanation
             scores_list.append(score)
             num_analyzed += 1
-
         except Exception as err:
             logger.error(f"Groq API error on frame t={ts}s: {err}")
-            ts_str = str(ts)
-            frame_explanations[ts_str] = f"Frame analysis encountered error: {err}"
 
-    # Average top 3 highest scores
     if num_analyzed > 0:
         sorted_scores = sorted(scores_list, reverse=True)
         top_scores = sorted_scores[:3]
@@ -219,9 +254,48 @@ def analyze_with_llm(suspicious_frames, reflection_prompt="", metadata=None, all
         llm_score = 0.0
 
     tools_used_list = sorted(list(all_tools_used))
-    llm_reasoning = (
-        f"ReAct agent analyzed {num_analyzed} frames using tools: {', '.join(tools_used_list) if tools_used_list else 'none'}. "
-        f"Top 3 frame average confidence: {round(llm_score, 2)}"
-    )
-
+    llm_reasoning = f"Groq analyzed {num_analyzed} frames (Tools: {', '.join(tools_used_list)}). Top confidence: {round(llm_score, 2)}"
     return llm_reasoning, frame_explanations, round(llm_score, 4), tools_used_list
+
+
+def analyze_with_llm(suspicious_frames, reflection_prompt="", metadata=None, all_frames=None):
+    """
+    Main LLM analysis entrypoint.
+    Priority 1: Google Gemini 2.5 Flash (Fast multi-image batch reasoning with native JSON output)
+    Priority 2: Groq Llama 3.2 Vision (Fallback)
+    """
+    if not suspicious_frames:
+        return "No suspicious frames flagged for analysis", {}, 0.0, []
+
+    # Check for Gemini API key first
+    gemini_key = os.environ.get("GEMINI_API_KEY")
+    if gemini_key:
+        try:
+            logger.info("Running visual reasoning with Google Gemini 2.5 Flash...")
+            res = analyze_with_gemini(
+                suspicious_frames,
+                reflection_prompt=reflection_prompt,
+                metadata=metadata,
+                all_frames=all_frames,
+                api_key=gemini_key
+            )
+            if res:
+                return res
+        except Exception as e:
+            logger.warning(f"Gemini failed, trying Groq fallback: {e}")
+
+    # Fallback to Groq
+    groq_key = os.environ.get("GROQ_API_KEY")
+    if groq_key:
+        logger.info("Running visual reasoning with Groq Llama 3.2 Vision...")
+        return analyze_with_groq(
+            suspicious_frames,
+            reflection_prompt=reflection_prompt,
+            metadata=metadata,
+            all_frames=all_frames,
+            api_key=groq_key
+        )
+
+    # If neither key is provided
+    frame_explanations = {str(round(f["timestamp"], 3)): "Analysis skipped (no GEMINI_API_KEY or GROQ_API_KEY set)." for f in suspicious_frames}
+    return "LLM analysis skipped because no API key is configured", frame_explanations, 0.0, []
