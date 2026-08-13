@@ -7,8 +7,10 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# HuggingFace model API endpoint for deepfake detection
-HF_API_URL = "https://api-inference.huggingface.co/models/dima806/deepfake_vs_real_image_detection"
+# HuggingFace model API endpoints
+HF_MODEL_ID = "dima806/deepfake_vs_real_image_detection"
+HF_ROUTER_URL = f"https://router.huggingface.co/hf-inference/models/{HF_MODEL_ID}"
+HF_LEGACY_URL = f"https://api-inference.huggingface.co/models/{HF_MODEL_ID}"
 
 
 def load_model():
@@ -18,7 +20,7 @@ def load_model():
     """
     try:
         from transformers import pipeline
-        return pipeline("image-classification", model="dima806/deepfake_vs_real_image_detection")
+        return pipeline("image-classification", model=HF_MODEL_ID)
     except Exception:
         # On Render or CPU servers, use HuggingFace free API over HTTP
         return "hf_api"
@@ -26,44 +28,52 @@ def load_model():
 
 def query_huggingface_api(img_array):
     """
-    sends a video frame to HuggingFace free API and gets the fake probability score
+    sends a video frame to HuggingFace free API using InferenceClient / Router endpoints
     """
+    hf_token = os.environ.get("HF_TOKEN")
+
+    # convert OpenCV BGR frame to RGB and PIL Image
+    rgb = cv2.cvtColor(img_array, cv2.COLOR_BGR2RGB)
+    pil_img = Image.fromarray(rgb)
+
+    buffer = io.BytesIO()
+    pil_img.save(buffer, format="JPEG")
+    image_bytes = buffer.getvalue()
+
+    # Method 1: Try official huggingface_hub InferenceClient
     try:
-        # convert OpenCV BGR frame to RGB and PIL Image
-        rgb = cv2.cvtColor(img_array, cv2.COLOR_BGR2RGB)
-        pil_img = Image.fromarray(rgb)
+        from huggingface_hub import InferenceClient
+        client = InferenceClient(token=hf_token)
+        predictions = client.image_classification(image=image_bytes, model=HF_MODEL_ID)
+        logger.info(f"HuggingFace InferenceClient predictions: {predictions}")
+        if isinstance(predictions, list):
+            for pred in predictions:
+                label_str = getattr(pred, "label", str(pred.get("label", ""))) if hasattr(pred, "label") or isinstance(pred, dict) else str(pred)
+                score_val = getattr(pred, "score", pred.get("score", 0.0)) if hasattr(pred, "score") or isinstance(pred, dict) else 0.0
+                if "fake" in label_str.lower():
+                    return float(score_val)
+    except Exception as hub_err:
+        logger.info(f"InferenceClient fallback to direct HTTP: {hub_err}")
 
-        # save PIL image to JPEG bytes
-        buffer = io.BytesIO()
-        pil_img.save(buffer, format="JPEG")
-        image_bytes = buffer.getvalue()
+    # Method 2: Try modern HuggingFace router REST endpoint
+    headers = {"x-wait-for-model": "true"}
+    if hf_token:
+        headers["Authorization"] = f"Bearer {hf_token}"
 
-        # add HuggingFace API key and wait-for-model header to prevent 503 cold-start skips
-        headers = {
-            "x-wait-for-model": "true"
-        }
-        hf_token = os.environ.get("HF_TOKEN")
-        if hf_token:
-            headers["Authorization"] = f"Bearer {hf_token}"
+    for url in [HF_ROUTER_URL, HF_LEGACY_URL]:
+        try:
+            response = requests.post(url, headers=headers, data=image_bytes, timeout=12)
+            if response.status_code == 200:
+                predictions = response.json()
+                logger.info(f"HuggingFace API response from {url}: {predictions}")
+                if isinstance(predictions, list):
+                    for pred in predictions:
+                        if isinstance(pred, dict) and "fake" in pred.get("label", "").lower():
+                            return float(pred.get("score", 0.0))
+        except Exception as http_err:
+            logger.warning(f"HuggingFace HTTP request to {url} failed: {http_err}")
 
-        # send POST request to HuggingFace GPU API
-        response = requests.post(HF_API_URL, headers=headers, data=image_bytes, timeout=12)
-        logger.info(f"HuggingFace Inference API HTTP status: {response.status_code}")
-
-        if response.status_code == 200:
-            predictions = response.json()
-            logger.info(f"HuggingFace Model Predictions: {predictions}")
-            # response format: [{"label": "Fake", "score": 0.88}, {"label": "Real", "score": 0.12}]
-            if isinstance(predictions, list):
-                for pred in predictions:
-                    if isinstance(pred, dict) and "fake" in pred.get("label", "").lower():
-                        return float(pred.get("score", 0.0))
-        else:
-            logger.warning(f"HuggingFace returned status {response.status_code}: {response.text}")
-        return None
-    except Exception as err:
-        logger.warning(f"HuggingFace API request failed: {err}")
-        return None
+    return None
 
 
 def calculate_heuristic_score(img_array, noise_var):
