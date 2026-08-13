@@ -38,22 +38,28 @@ def query_huggingface_api(img_array):
         pil_img.save(buffer, format="JPEG")
         image_bytes = buffer.getvalue()
 
-        # add HuggingFace API key if set in environment variables
-        headers = {}
+        # add HuggingFace API key and wait-for-model header to prevent 503 cold-start skips
+        headers = {
+            "x-wait-for-model": "true"
+        }
         hf_token = os.environ.get("HF_TOKEN")
         if hf_token:
             headers["Authorization"] = f"Bearer {hf_token}"
 
         # send POST request to HuggingFace GPU API
-        response = requests.post(HF_API_URL, headers=headers, data=image_bytes, timeout=8)
+        response = requests.post(HF_API_URL, headers=headers, data=image_bytes, timeout=12)
+        logger.info(f"HuggingFace Inference API HTTP status: {response.status_code}")
 
         if response.status_code == 200:
             predictions = response.json()
+            logger.info(f"HuggingFace Model Predictions: {predictions}")
             # response format: [{"label": "Fake", "score": 0.88}, {"label": "Real", "score": 0.12}]
             if isinstance(predictions, list):
                 for pred in predictions:
                     if isinstance(pred, dict) and "fake" in pred.get("label", "").lower():
                         return float(pred.get("score", 0.0))
+        else:
+            logger.warning(f"HuggingFace returned status {response.status_code}: {response.text}")
         return None
     except Exception as err:
         logger.warning(f"HuggingFace API request failed: {err}")

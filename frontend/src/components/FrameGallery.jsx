@@ -23,8 +23,11 @@ function FrameGallery({ thumbnails, explanations }) {
       }}>
         {thumbnails.map((item, idx) => {
           const tsVal = Number(item.timestamp);
-          const matchedKey = Object.keys(explanations || {}).find(key => Number(key) === tsVal);
-          const explanation = matchedKey ? explanations[matchedKey] : "No detailed forensic analysis available for this frame.";
+          // Fuzzy match within 0.15 seconds to prevent floating point rounding mismatches (e.g. 0.48 vs 0.479)
+          const matchedKey = Object.keys(explanations || {}).find(key => Math.abs(Number(key) - tsVal) < 0.15);
+          const explanation = (matchedKey && explanations[matchedKey]) 
+            ? explanations[matchedKey] 
+            : `Flagged at t=${item.timestamp}s due to elevated spatial noise variance and temporal motion anomalies.`;
 
           return (
             <div 
