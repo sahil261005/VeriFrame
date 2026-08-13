@@ -78,6 +78,28 @@ export const analysisService = {
       responseType: 'blob',
     });
     return response.data;
+  },
+
+  createEventStream(jobId, onEvent, onError) {
+    const streamUrl = `${API_URL}/stream/${jobId}`;
+    const eventSource = new EventSource(streamUrl);
+
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (onEvent) onEvent(data);
+      } catch (err) {
+        console.error('Error parsing SSE event data:', err);
+      }
+    };
+
+    eventSource.onerror = (err) => {
+      console.error('SSE connection error:', err);
+      if (onError) onError(err);
+      eventSource.close();
+    };
+
+    return eventSource;
   }
 };
 

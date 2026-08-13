@@ -1,63 +1,98 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { analysisService } from '../api';
 
 function StatusFeed({ jobId, onAnalysisComplete }) {
   const [status, setStatus] = useState('processing');
   const [error, setError] = useState('');
+  const [liveEvents, setLiveEvents] = useState([]);
   const navigate = useNavigate();
+  const eventsEndRef = useRef(null);
 
-  const steps = [
-    { label: 'Decompressing and segmenting media...', desc: 'Extracting video keyframes and validating stream container.' },
-    { label: 'Running visual artifact inspection...', desc: 'Analyzing color channel noise residuals and spatial anomalies.' },
-    { label: 'Analyzing motion and temporal flow...', desc: 'Tracking facial landmarks and movement continuity between adjacent frames.' },
-    { label: 'Generating consensus score...', desc: 'Calculating weighted averages from visual and temporal detectors.' }
-  ];
+  // Auto-scroll to latest SSE event
+  useEffect(() => {
+    eventsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [liveEvents]);
 
   useEffect(() => {
+    let eventSource;
     let intervalId;
 
+    // 1. Setup real-time SSE event stream
+    eventSource = analysisService.createEventStream(
+      jobId,
+      (data) => {
+        if (data.agent && data.message) {
+          setLiveEvents((prev) => [...prev, data]);
+        }
+        if (data.status === 'completed') {
+          setStatus('completed');
+          onAnalysisComplete(jobId);
+          navigate(`/analysis/${jobId}`);
+        } else if (data.status === 'failed') {
+          setStatus('failed');
+          setError('Video analysis pipeline encountered an error.');
+        }
+      },
+      () => {
+        // If SSE fails or drops connection, fall back to traditional polling
+        console.warn('SSE stream closed, falling back to polling...');
+      }
+    );
+
+    // 2. Backup status polling (every 2.5s) to guarantee completion redirect
     const checkStatus = async () => {
       try {
         const data = await analysisService.getAnalysis(jobId);
         setStatus(data.status);
-        
+
         if (data.status === 'completed') {
-          clearInterval(intervalId);
           onAnalysisComplete(jobId);
           navigate(`/analysis/${jobId}`);
         } else if (data.status === 'failed') {
-          clearInterval(intervalId);
           setError('Video analysis pipeline encountered an error.');
         }
       } catch (err) {
-        console.error('Error polling status:', err);
+        console.error('Error polling status fallback:', err);
       }
     };
 
-    // run initial check and start interval
-    checkStatus();
     intervalId = setInterval(checkStatus, 2500);
 
     return () => {
-      clearInterval(intervalId);
+      if (eventSource) eventSource.close();
+      if (intervalId) clearInterval(intervalId);
     };
-  }, [jobId]);
+  }, [jobId, navigate, onAnalysisComplete]);
+
+  const defaultSteps = [
+    { agent: 'Visual Forensics', label: 'Spatial artifact & noise inspection' },
+    { agent: 'Temporal Agent', label: 'Optical flow & facial landmark geometry tracking' },
+    { agent: 'Router Node', label: 'Dynamic confidence routing (skip/extend LLM)' },
+    { agent: 'Cognitive Reasoning', label: 'ReAct tool execution & LLM vision analysis' },
+    { agent: 'Reflection Node', label: 'Self-correction & reasoning alignment audit' },
+    { agent: 'Consensus Engine', label: 'Synthesizing final multi-agent verdict' }
+  ];
 
   return (
-    <div style={{ maxWidth: '600px', width: '100%', margin: '60px auto 0 auto' }}>
-      <div className="card" style={{ padding: '40px', overflow: 'hidden' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', marginBottom: '40px' }}>
+    <div style={{ maxWidth: '680px', width: '100%', margin: '50px auto 0 auto' }}>
+      <div className="card" style={{ padding: '36px', overflow: 'hidden' }}>
+        <div style={{ textAlign: 'center', marginBottom: '30px' }}>
           {error ? (
-            <div style={{ color: 'var(--danger)', fontSize: '18px', fontWeight: '600' }}>Analysis Failed</div>
+            <div style={{ color: 'var(--danger)', fontSize: '18px', fontWeight: '600' }}>
+              Analysis Failed
+            </div>
           ) : (
             <>
-              <div style={{ fontSize: '14px', fontWeight: '600', color: 'var(--text-secondary)', marginBottom: '15px' }}>
-                Scanning file...
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '6px 14px', borderRadius: '20px', backgroundColor: 'rgba(59, 130, 246, 0.1)', color: 'var(--primary)', fontSize: '13px', fontWeight: '600', marginBottom: '12px' }}>
+                <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: 'var(--primary)', animation: 'pulse 1.5s infinite' }} />
+                Real-Time LangGraph SSE Stream
               </div>
-              <h3 style={{ fontSize: '20px', fontWeight: '700', marginBottom: '8px' }}>Processing Video...</h3>
+              <h3 style={{ fontSize: '22px', fontWeight: '700', marginBottom: '6px' }}>
+                Executing Multi-Agent Graph...
+              </h3>
               <p style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
-                Running localized computer vision classification models. Please do not close this page.
+                LangGraph agents are streaming execution state via Server-Sent Events.
               </p>
             </>
           )}
@@ -68,23 +103,54 @@ function StatusFeed({ jobId, onAnalysisComplete }) {
             {error}
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', textAlign: 'left' }}>
-            <h4 style={{ fontSize: '15px', fontWeight: '700', color: 'var(--text-primary)', marginBottom: '10px' }}>
-              Execution Pipeline:
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <h4 style={{ fontSize: '14px', fontWeight: '700', color: 'var(--text-primary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Live Execution Feed:
             </h4>
-            {steps.map((step, idx) => (
-              <div key={idx} style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
-                <span style={{ color: 'var(--primary)', fontWeight: 'bold', fontSize: '14px', marginTop: '1px' }}>•</span>
-                <div>
-                  <div style={{ fontSize: '14px', fontWeight: '600', color: 'var(--text-primary)' }}>
-                    {step.label}
-                  </div>
-                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                    {step.desc}
-                  </div>
+
+            {/* Real-time SSE Events Log */}
+            <div style={{ maxHeight: '280px', overflowY: 'auto', padding: '16px', borderRadius: '8px', backgroundColor: 'rgba(15, 23, 42, 0.05)', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {liveEvents.length === 0 ? (
+                <div style={{ fontSize: '13px', color: 'var(--text-secondary)', fontStyle: 'italic', textAlign: 'center', padding: '20px 0' }}>
+                  Connecting to agent SSE stream...
                 </div>
+              ) : (
+                liveEvents.map((evt, idx) => (
+                  <div key={idx} style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', fontSize: '13px' }}>
+                    <span style={{ padding: '2px 8px', borderRadius: '4px', backgroundColor: 'rgba(59, 130, 246, 0.15)', color: 'var(--primary)', fontWeight: '600', fontSize: '11px', whiteSpace: 'nowrap', marginTop: '1px' }}>
+                      {evt.agent}
+                    </span>
+                    <span style={{ color: 'var(--text-primary)', lineHeight: '1.4' }}>
+                      {evt.message}
+                    </span>
+                  </div>
+                ))
+              )}
+              <div ref={eventsEndRef} />
+            </div>
+
+            {/* Static Pipeline Checklist */}
+            <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <div style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>
+                Pipeline Graph Topology:
               </div>
-            ))}
+              {defaultSteps.map((step, idx) => {
+                const isExecuted = liveEvents.some((e) => e.agent && e.agent.toLowerCase().includes(step.agent.toLowerCase()));
+                return (
+                  <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '13px' }}>
+                    <span style={{ width: '16px', height: '16px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: isExecuted ? '#22c55e' : 'var(--border-color)', color: '#fff', fontSize: '10px', fontWeight: 'bold' }}>
+                      {isExecuted ? '✓' : idx + 1}
+                    </span>
+                    <span style={{ fontWeight: '600', color: isExecuted ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
+                      {step.agent}:
+                    </span>
+                    <span style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>
+                      {step.label}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
       </div>
@@ -93,6 +159,3 @@ function StatusFeed({ jobId, onAnalysisComplete }) {
 }
 
 export default StatusFeed;
-
-
-

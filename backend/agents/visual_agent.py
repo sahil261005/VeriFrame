@@ -1,42 +1,92 @@
 import os
-# Configure HuggingFace client to fail fast if blocked by proxies
-os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
-os.environ["HF_HUB_MAX_RETRIES"] = "1"
-os.environ["HF_HUB_ETAG_TIMEOUT"] = "1"
-
+import io
+import requests
 from PIL import Image
-import numpy as np
 import cv2
 import logging
 
 logger = logging.getLogger(__name__)
 
-# load model once and cache it here so we dont do it every run
-_pipeline = None
+# HuggingFace model API endpoint for deepfake detection
+HF_API_URL = "https://api-inference.huggingface.co/models/dima806/deepfake_vs_real_image_detection"
+
 
 def load_model():
-    global _pipeline
-    if _pipeline is not None:
-        return _pipeline
-
+    """
+    tries to load local transformers model.
+    if transformers is missing or on cloud server (Render), uses 'hf_api'.
+    """
     try:
-        # import inside so it doesnt crash if transformers package is missing
         from transformers import pipeline
-        logger.info("loading deepfake detection model from huggingface... (first time takes a while)")
-        _pipeline = pipeline(
-            "image-classification",
-            model="dima806/deepfake_vs_real_image_detection"
-        )
-        logger.info("model loaded successfully.")
-    except Exception as e:
-        logger.warning(f"could not load huggingface model ({e}). using fallback visual heuristics.")
-        _pipeline = "fallback"
+        return pipeline("image-classification", model="dima806/deepfake_vs_real_image_detection")
+    except Exception:
+        # On Render or CPU servers, use HuggingFace free API over HTTP
+        return "hf_api"
 
-    return _pipeline
+
+def query_huggingface_api(img_array):
+    """
+    sends a video frame to HuggingFace free API and gets the fake probability score
+    """
+    try:
+        # convert OpenCV BGR frame to RGB and PIL Image
+        rgb = cv2.cvtColor(img_array, cv2.COLOR_BGR2RGB)
+        pil_img = Image.fromarray(rgb)
+
+        # save PIL image to JPEG bytes
+        buffer = io.BytesIO()
+        pil_img.save(buffer, format="JPEG")
+        image_bytes = buffer.getvalue()
+
+        # add HuggingFace API key if set in environment variables
+        headers = {}
+        hf_token = os.environ.get("HF_TOKEN")
+        if hf_token:
+            headers["Authorization"] = f"Bearer {hf_token}"
+
+        # send POST request to HuggingFace GPU API
+        response = requests.post(HF_API_URL, headers=headers, data=image_bytes, timeout=8)
+
+        if response.status_code == 200:
+            predictions = response.json()
+            # response format: [{"label": "Fake", "score": 0.88}, {"label": "Real", "score": 0.12}]
+            if isinstance(predictions, list):
+                for pred in predictions:
+                    if isinstance(pred, dict) and "fake" in pred.get("label", "").lower():
+                        return float(pred.get("score", 0.0))
+        return None
+    except Exception as err:
+        logger.warning(f"HuggingFace API request failed: {err}")
+        return None
+
+
+def calculate_heuristic_score(img_array, noise_var):
+    """
+    fallback function: calculates fake score using simple image noise and edge sharpness
+    """
+    gray = cv2.cvtColor(img_array, cv2.COLOR_BGR2GRAY)
+    laplacian_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+    base_score = 0.15
+
+    # AI images are unnaturally smooth (very low noise variance)
+    if noise_var < 0.002:
+        base_score += 0.35
+
+    # check for blurry face blending edges or artificial over-sharpness
+    if laplacian_var < 80.0:
+        base_score += 0.35
+    elif laplacian_var > 600.0:
+        base_score += 0.15
+
+    # cap final score between 0.05 and 0.95
+    return min(max(base_score, 0.05), 0.95)
 
 
 def analyze_frames(frames, pipe):
-    # takes frame list from extraction and runs them through the classifier
+    """
+    loops over video frames and calculates deepfake confidence score for each frame
+    """
     per_frame_results = []
 
     for frame_data in frames:
@@ -44,55 +94,30 @@ def analyze_frames(frames, pipe):
         timestamp = frame_data["timestamp"]
         noise_var = frame_data.get("noise_variance", 0)
 
-        if pipe == "fallback":
-            gray = cv2.cvtColor(img_array, cv2.COLOR_BGR2GRAY)
-            laplacian_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        fake_score = None
 
-            # Heuristics: AI-generated images lack natural camera high-frequency sensor noise.
-            # Normal camera noise variance is typically > 0.05. Very smooth noise (< 0.005) is highly suspicious.
-            base_fake = 0.15
-            if noise_var < 0.002:
-                base_fake += 0.35  # Suspiciously smooth/clean noise
-            if laplacian_var < 80.0:
-                base_fake += 0.35  # Blurry face / blending outlines
-            elif laplacian_var > 600.0:
-                base_fake += 0.15  # Extremely sharp artificial edges (common in AI generations)
+        # Step 1: Try HuggingFace Cloud API first (for Render server)
+        if pipe == "hf_api":
+            fake_score = query_huggingface_api(img_array)
 
-            fake_score = min(max(base_fake, 0.05), 0.95)
-            label = "fake" if fake_score > 0.5 else "real"
-        else:
-            # convert BGR to RGB and then to PIL image
-            rgb = img_array[:, :, ::-1]
-            pil_img = Image.fromarray(rgb)
-
-            # run model
+        # Step 2: Try local PyTorch model if installed
+        elif not isinstance(pipe, str):
             try:
+                rgb = cv2.cvtColor(img_array, cv2.COLOR_BGR2RGB)
+                pil_img = Image.fromarray(rgb)
                 predictions = pipe(pil_img)
-                model_score = 0.0
                 for pred in predictions:
                     if "fake" in pred["label"].lower():
-                        model_score = pred["score"]
+                        fake_score = float(pred["score"])
                         break
+            except Exception:
+                fake_score = None
 
-                # add a penalty if the frame is too smooth (indicates AI generation)
-                noise_penalty = 0.0
-                if noise_var < 0.002:
-                    noise_penalty = 0.40
+        # Step 3: Fallback to noise heuristics if API or local model failed
+        if fake_score is None:
+            fake_score = calculate_heuristic_score(img_array, noise_var)
 
-                # combine model score and noise check
-                fake_score = model_score + noise_penalty
-                
-                # cap it between 0.05 and 0.95
-                if fake_score > 0.95:
-                    fake_score = 0.95
-                elif fake_score < 0.05:
-                    fake_score = 0.05
-
-                label = "fake" if fake_score > 0.5 else "real"
-            except Exception as e:
-                logger.warning(f"model failed on frame at {timestamp}s: {e}")
-                fake_score = 0.0
-                label = "error"
+        label = "fake" if fake_score > 0.5 else "real"
 
         per_frame_results.append({
             "timestamp": timestamp,
@@ -101,18 +126,15 @@ def analyze_frames(frames, pipe):
             "label": label
         })
 
-    # avg fake score of all frames
+    # Calculate average fake score across all frames
     if len(per_frame_results) > 0:
-        total = 0
-        for r in per_frame_results:
-            total += r["fake_confidence"]
-        visual_score = total / len(per_frame_results)
+        total_score = sum(f["fake_confidence"] for f in per_frame_results)
+        visual_score = total_score / len(per_frame_results)
     else:
         visual_score = 0.0
 
-    # get top 5 most suspicious frames
+    # Get top 5 most suspicious frames
     sorted_frames = sorted(per_frame_results, key=lambda x: x["fake_confidence"], reverse=True)
     flagged = sorted_frames[:5]
 
     return round(visual_score, 4), flagged, per_frame_results
-
