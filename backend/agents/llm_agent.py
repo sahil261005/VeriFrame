@@ -6,16 +6,15 @@ import re
 import logging
 from PIL import Image
 import cv2
+from concurrent.futures import ThreadPoolExecutor
 from agents.tools import TOOL_REGISTRY
 
 logger = logging.getLogger(__name__)
 
 
 def pick_suspicious_frames(visual_flagged, temporal_flagged, all_frames, max_count=8):
-    """
-    merges timestamps flagged by visual and temporal agents, sorts them,
-    and returns up to max_count matching frames from all_frames.
-    """
+    # grab the most suspicious frames from visual + temporal results
+    # and backfill with evenly spaced frames if we dont have enough
     flagged_times = set()
     
     for f in visual_flagged:
@@ -50,10 +49,7 @@ def pick_suspicious_frames(visual_flagged, temporal_flagged, all_frames, max_cou
 
 
 def run_tools_for_frame(frame_data, all_frames=None, metadata=None):
-    """
-    ReAct tool execution step: runs applicable forensic tools on a frame
-    to produce deterministic tool observations before calling LLM.
-    """
+    # run our forensic tools on a single frame and collect results
     tool_results = {}
     tools_called = []
 
@@ -95,9 +91,7 @@ def run_tools_for_frame(frame_data, all_frames=None, metadata=None):
 
 
 def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, all_frames=None, api_key=None):
-    """
-    Analyzes multiple frames at once using Google Gemini 2.5 Flash with native multi-image context & JSON schema.
-    """
+    # sends frames to Gemini 2.5 Flash for multi-image analysis and gets back a JSON verdict
     from google import genai
     from google.genai import types
 
@@ -106,10 +100,11 @@ def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, 
     tool_summaries = []
     all_tools_used = set()
 
-    # Run ReAct tools concurrently across all suspicious frames
+    # run tools on all frames at once using threads (they are independent so this is safe)
     from concurrent.futures import ThreadPoolExecutor
-    with ThreadPoolExecutor(max_workers=min(len(suspicious_frames), 6)) as executor:
-        tool_results_list = list(executor.map(
+    workers = min(len(suspicious_frames), 6)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        tool_results_list = list(pool.map(
             lambda f: run_tools_for_frame(f, all_frames=all_frames, metadata=metadata),
             suspicious_frames
         ))
@@ -180,9 +175,7 @@ def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, 
 
 
 def analyze_with_groq(suspicious_frames, reflection_prompt="", metadata=None, all_frames=None, api_key=None):
-    """
-    Fallback analyzer using Groq Llama 3.2 Vision
-    """
+    # fallback: sends frames one by one to Groq Llama if Gemini is unavailable
     from groq import Groq
     client = Groq(api_key=api_key)
     frame_explanations = {}
@@ -266,11 +259,7 @@ def analyze_with_groq(suspicious_frames, reflection_prompt="", metadata=None, al
 
 
 def analyze_with_llm(suspicious_frames, reflection_prompt="", metadata=None, all_frames=None):
-    """
-    Main LLM analysis entrypoint.
-    Priority 1: Google Gemini 2.5 Flash (Fast multi-image batch reasoning with native JSON output)
-    Priority 2: Groq Llama 3.2 Vision (Fallback)
-    """
+    # main entry point: tries Gemini first, falls back to Groq
     if not suspicious_frames:
         return "No suspicious frames flagged for analysis", {}, 0.0, []
 

@@ -124,15 +124,14 @@ def swagger_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session 
 # worker function to run the deepfake analysis in the background
 def process_video_task(job_id: str, temp_path: str, meta: dict):
     db = database.SessionLocal()
-    downscaled_path = None
     try:
         logger.info(f"background processing started for job {job_id}...")
         
-        # 1. extract and downscale sample frames directly in-memory (instant, zero disk re-encoding)
+        # 1. grab sample frames from the video and resize them in memory
         frames = preprocessing.extract_frames(temp_path, interval=0.8, target_height=480, max_frames=14)
-        logger.info(f"extracted {len(frames)} keyframes in-memory for job {job_id}.")
+        logger.info(f"extracted {len(frames)} frames for job {job_id}.")
         
-        # 3. run langgraph multi-agent pipeline
+        # 2. run langgraph multi-agent pipeline
         pipeline_output = run_pipeline(frames, meta, job_id=job_id)
         logger.info(f"langgraph pipeline completed for job {job_id}.")
         
@@ -197,17 +196,12 @@ def process_video_task(job_id: str, temp_path: str, meta: dict):
             
     finally:
         db.close()
+        # clean up the uploaded temp file
         if os.path.exists(temp_path):
             try:
                 os.remove(temp_path)
             except Exception as e:
                 logger.error(f"error removing temp video {temp_path}: {e}")
-                
-        if downscaled_path and os.path.exists(downscaled_path):
-            try:
-                os.remove(downscaled_path)
-            except Exception as e:
-                logger.error(f"error removing downscaled video {downscaled_path}: {e}")
 
 
 @app.post("/upload", response_model=schemas.JobStatusResponse)

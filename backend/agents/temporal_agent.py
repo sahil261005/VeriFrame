@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import math
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -161,14 +162,11 @@ def check_face_consistency(frames):
     return results
 
 
-from concurrent.futures import ThreadPoolExecutor
-
-
 def run_temporal_analysis(frames):
-    # run optical flow and face mesh consistency concurrently in parallel
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        future_flow = executor.submit(compute_optical_flow, frames)
-        future_face = executor.submit(check_face_consistency, frames)
+    # run both checks at the same time using threads to save time
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        future_flow = pool.submit(compute_optical_flow, frames)
+        future_face = pool.submit(check_face_consistency, frames)
         flow_results = future_flow.result()
         face_results = future_face.result()
 

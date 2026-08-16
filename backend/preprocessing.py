@@ -212,7 +212,7 @@ def downscale_video(file_path, output_path, target_height=480):
     out.release()
     return output_path
 
-# extract sample frames and resize in-memory (no slow disk re-encoding pass)
+# pull sample frames from video and resize them in memory instead of writing a whole new file
 def extract_frames(file_path, interval=0.8, target_height=480, max_frames=14):
     cap = cv2.VideoCapture(file_path)
     if not cap.isOpened():
@@ -225,7 +225,7 @@ def extract_frames(file_path, interval=0.8, target_height=480, max_frames=14):
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     duration = total_frames / fps if fps > 0 else 10.0
     
-    # calculate smart sample interval to get ~8-14 high-value keyframes
+    # for longer videos take fewer samples, short videos take more
     if duration > 15.0:
         sample_interval = max(interval, 1.2)
     elif duration > 6.0:

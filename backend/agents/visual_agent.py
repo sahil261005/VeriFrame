@@ -4,6 +4,7 @@ import requests
 from PIL import Image
 import cv2
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +28,7 @@ def load_model():
 
 
 def query_huggingface_api(img_array):
-    """
-    sends a video frame to HuggingFace free API using InferenceClient / Router endpoints
-    """
+    # sends a frame to HuggingFace cloud API and returns the fake score
     hf_token = os.environ.get("HF_TOKEN")
 
     # convert OpenCV BGR frame to RGB and PIL Image
@@ -48,8 +47,15 @@ def query_huggingface_api(img_array):
         logger.info(f"HuggingFace InferenceClient predictions: {predictions}")
         if isinstance(predictions, list):
             for pred in predictions:
-                label_str = getattr(pred, "label", str(pred.get("label", ""))) if hasattr(pred, "label") or isinstance(pred, dict) else str(pred)
-                score_val = getattr(pred, "score", pred.get("score", 0.0)) if hasattr(pred, "score") or isinstance(pred, dict) else 0.0
+                # huggingface returns objects or dicts depending on version, handle both
+                if hasattr(pred, "label"):
+                    label_str = pred.label
+                    score_val = pred.score
+                elif isinstance(pred, dict):
+                    label_str = pred.get("label", "")
+                    score_val = pred.get("score", 0.0)
+                else:
+                    continue
                 if "fake" in label_str.lower():
                     return float(score_val)
     except Exception as hub_err:
@@ -103,13 +109,11 @@ def calculate_heuristic_score(img_array, noise_var):
     return min(max(base_score, 0.05), 0.95)
 
 
-from concurrent.futures import ThreadPoolExecutor
+
 
 
 def analyze_single_frame(frame_data, pipe):
-    """
-    analyzes a single frame using HuggingFace API, local model, or heuristics
-    """
+    # runs deepfake check on one frame. used by the thread pool below
     img_array = frame_data["image"]
     timestamp = frame_data["timestamp"]
     noise_var = frame_data.get("noise_variance", 0)
@@ -148,16 +152,14 @@ def analyze_single_frame(frame_data, pipe):
 
 
 def analyze_frames(frames, pipe):
-    """
-    runs frame analysis concurrently across frames for blazing fast response times
-    """
+    # check all frames for deepfakes. uses threads so we dont wait for each API call one by one
     if not frames:
         return 0.0, [], []
 
-    # Run in parallel using thread pool to eliminate serial network latency
+    # run frames through the model in parallel (each one makes an HTTP call so threading helps a lot)
     workers = min(len(frames), 6)
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        per_frame_results = list(executor.map(lambda f: analyze_single_frame(f, pipe), frames))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        per_frame_results = list(pool.map(lambda f: analyze_single_frame(f, pipe), frames))
 
     # Calculate average fake score across all frames
     if len(per_frame_results) > 0:
