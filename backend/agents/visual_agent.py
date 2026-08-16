@@ -55,23 +55,27 @@ def query_huggingface_api(img_array):
     except Exception as hub_err:
         logger.info(f"InferenceClient fallback to direct HTTP: {hub_err}")
 
-    # Method 2: Try modern HuggingFace router REST endpoint
-    headers = {"x-wait-for-model": "true"}
+    # Method 2: Try modern HuggingFace router REST endpoint with explicit Content-Type
+    headers = {
+        "Content-Type": "image/jpeg",
+        "x-wait-for-model": "true"
+    }
     if hf_token:
         headers["Authorization"] = f"Bearer {hf_token}"
 
-    for url in [HF_ROUTER_URL, HF_LEGACY_URL]:
-        try:
-            response = requests.post(url, headers=headers, data=image_bytes, timeout=12)
-            if response.status_code == 200:
-                predictions = response.json()
-                logger.info(f"HuggingFace API response from {url}: {predictions}")
-                if isinstance(predictions, list):
-                    for pred in predictions:
-                        if isinstance(pred, dict) and "fake" in pred.get("label", "").lower():
-                            return float(pred.get("score", 0.0))
-        except Exception as http_err:
-            logger.warning(f"HuggingFace HTTP request to {url} failed: {http_err}")
+    try:
+        response = requests.post(HF_ROUTER_URL, headers=headers, data=image_bytes, timeout=12)
+        if response.status_code == 200:
+            predictions = response.json()
+            logger.info(f"HuggingFace API response: {predictions}")
+            if isinstance(predictions, list):
+                for pred in predictions:
+                    if isinstance(pred, dict) and "fake" in pred.get("label", "").lower():
+                        return float(pred.get("score", 0.0))
+        else:
+            logger.warning(f"HuggingFace HTTP {response.status_code}: {response.text}")
+    except Exception as http_err:
+        logger.warning(f"HuggingFace HTTP request to {HF_ROUTER_URL} failed: {http_err}")
 
     return None
 
