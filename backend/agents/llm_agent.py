@@ -106,9 +106,16 @@ def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, 
     tool_summaries = []
     all_tools_used = set()
 
-    for idx, f in enumerate(suspicious_frames):
+    # Run ReAct tools concurrently across all suspicious frames
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=min(len(suspicious_frames), 6)) as executor:
+        tool_results_list = list(executor.map(
+            lambda f: run_tools_for_frame(f, all_frames=all_frames, metadata=metadata),
+            suspicious_frames
+        ))
+
+    for idx, (f, (tool_results, tools_called)) in enumerate(zip(suspicious_frames, tool_results_list)):
         ts = round(f["timestamp"], 3)
-        tool_results, tools_called = run_tools_for_frame(f, all_frames=all_frames, metadata=metadata)
         all_tools_used.update(tools_called)
 
         # Convert frame to PIL image

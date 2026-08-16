@@ -161,13 +161,16 @@ def check_face_consistency(frames):
     return results
 
 
-def run_temporal_analysis(frames):
-    # run optical flow and face meshes, then merge results
-    logger.info("running optical flow analysis...")
-    flow_results = compute_optical_flow(frames)
+from concurrent.futures import ThreadPoolExecutor
 
-    logger.info("running face consistency analysis...")
-    face_results = check_face_consistency(frames)
+
+def run_temporal_analysis(frames):
+    # run optical flow and face mesh consistency concurrently in parallel
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        future_flow = executor.submit(compute_optical_flow, frames)
+        future_face = executor.submit(check_face_consistency, frames)
+        flow_results = future_flow.result()
+        face_results = future_face.result()
 
     # combine timestamps flagged by either test
     flagged_timestamps = []

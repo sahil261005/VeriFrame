@@ -128,15 +128,9 @@ def process_video_task(job_id: str, temp_path: str, meta: dict):
     try:
         logger.info(f"background processing started for job {job_id}...")
         
-        # 1. downscale video to 480p to keep processing efficient
-        downscaled_path = os.path.join(config.UPLOAD_DIR, f"downscaled_{job_id}.mp4")
-        preprocessing.downscale_video(temp_path, downscaled_path)
-        logger.info(f"video downscaled for job {job_id}.")
-        
-        # 2. extract frames every 0.5 seconds
-        # we extract at 0.5s intervals so the agents have enough resolution to track inconsistencies
-        frames = preprocessing.extract_frames(downscaled_path, interval=0.5)
-        logger.info(f"extracted {len(frames)} frames for job {job_id}.")
+        # 1. extract and downscale sample frames directly in-memory (instant, zero disk re-encoding)
+        frames = preprocessing.extract_frames(temp_path, interval=0.8, target_height=480, max_frames=14)
+        logger.info(f"extracted {len(frames)} keyframes in-memory for job {job_id}.")
         
         # 3. run langgraph multi-agent pipeline
         pipeline_output = run_pipeline(frames, meta, job_id=job_id)

@@ -212,20 +212,28 @@ def downscale_video(file_path, output_path, target_height=480):
     out.release()
     return output_path
 
-# extract frames every X seconds. does not write to disk so its fast.
-# returns dicts with timestamp, index, and numpy array
-def extract_frames(file_path, interval=0.5):
+# extract sample frames and resize in-memory (no slow disk re-encoding pass)
+def extract_frames(file_path, interval=0.8, target_height=480, max_frames=14):
     cap = cv2.VideoCapture(file_path)
     if not cap.isOpened():
         raise ValueError("could not open video to extract frames")
         
     fps = cap.get(cv2.CAP_PROP_FPS)
     if fps <= 0:
-        # fallback if fps is broken
         fps = 30.0
         
-    # how many frames to skip
-    frame_skip = max(1, int(fps * interval))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    duration = total_frames / fps if fps > 0 else 10.0
+    
+    # calculate smart sample interval to get ~8-14 high-value keyframes
+    if duration > 15.0:
+        sample_interval = max(interval, 1.2)
+    elif duration > 6.0:
+        sample_interval = max(interval, 0.8)
+    else:
+        sample_interval = 0.5
+        
+    frame_skip = max(1, int(fps * sample_interval))
     
     frames = []
     frame_idx = 0
@@ -235,8 +243,16 @@ def extract_frames(file_path, interval=0.5):
         if not ret:
             break
             
-        # pull the frame if its on the interval skip
         if frame_idx % frame_skip == 0:
+            h, w = frame.shape[:2]
+            # downscale in-memory if needed
+            if h > target_height:
+                aspect = w / h
+                new_w = int(target_height * aspect)
+                if new_w % 2 != 0:
+                    new_w += 1
+                frame = cv2.resize(frame, (new_w, target_height), interpolation=cv2.INTER_AREA)
+                
             timestamp = frame_idx / fps
             noise_var = compute_noise_residual(frame)
             frames.append({
@@ -245,6 +261,10 @@ def extract_frames(file_path, interval=0.5):
                 "image": frame,
                 "noise_variance": round(noise_var, 4)
             })
+            
+            if len(frames) >= max_frames:
+                break
+                
         frame_idx += 1
         
     cap.release()

@@ -103,48 +103,61 @@ def calculate_heuristic_score(img_array, noise_var):
     return min(max(base_score, 0.05), 0.95)
 
 
+from concurrent.futures import ThreadPoolExecutor
+
+
+def analyze_single_frame(frame_data, pipe):
+    """
+    analyzes a single frame using HuggingFace API, local model, or heuristics
+    """
+    img_array = frame_data["image"]
+    timestamp = frame_data["timestamp"]
+    noise_var = frame_data.get("noise_variance", 0)
+
+    fake_score = None
+
+    # Step 1: Try HuggingFace Cloud API first (for Render server)
+    if pipe == "hf_api":
+        fake_score = query_huggingface_api(img_array)
+
+    # Step 2: Try local PyTorch model if installed
+    elif not isinstance(pipe, str):
+        try:
+            rgb = cv2.cvtColor(img_array, cv2.COLOR_BGR2RGB)
+            pil_img = Image.fromarray(rgb)
+            predictions = pipe(pil_img)
+            for pred in predictions:
+                if "fake" in pred["label"].lower():
+                    fake_score = float(pred["score"])
+                    break
+        except Exception:
+            fake_score = None
+
+    # Step 3: Fallback to noise heuristics if API or local model failed
+    if fake_score is None:
+        fake_score = calculate_heuristic_score(img_array, noise_var)
+
+    label = "fake" if fake_score > 0.5 else "real"
+
+    return {
+        "timestamp": timestamp,
+        "fake_confidence": round(fake_score, 4),
+        "noise_variance": noise_var,
+        "label": label
+    }
+
+
 def analyze_frames(frames, pipe):
     """
-    loops over video frames and calculates deepfake confidence score for each frame
+    runs frame analysis concurrently across frames for blazing fast response times
     """
-    per_frame_results = []
+    if not frames:
+        return 0.0, [], []
 
-    for frame_data in frames:
-        img_array = frame_data["image"]
-        timestamp = frame_data["timestamp"]
-        noise_var = frame_data.get("noise_variance", 0)
-
-        fake_score = None
-
-        # Step 1: Try HuggingFace Cloud API first (for Render server)
-        if pipe == "hf_api":
-            fake_score = query_huggingface_api(img_array)
-
-        # Step 2: Try local PyTorch model if installed
-        elif not isinstance(pipe, str):
-            try:
-                rgb = cv2.cvtColor(img_array, cv2.COLOR_BGR2RGB)
-                pil_img = Image.fromarray(rgb)
-                predictions = pipe(pil_img)
-                for pred in predictions:
-                    if "fake" in pred["label"].lower():
-                        fake_score = float(pred["score"])
-                        break
-            except Exception:
-                fake_score = None
-
-        # Step 3: Fallback to noise heuristics if API or local model failed
-        if fake_score is None:
-            fake_score = calculate_heuristic_score(img_array, noise_var)
-
-        label = "fake" if fake_score > 0.5 else "real"
-
-        per_frame_results.append({
-            "timestamp": timestamp,
-            "fake_confidence": round(fake_score, 4),
-            "noise_variance": noise_var,
-            "label": label
-        })
+    # Run in parallel using thread pool to eliminate serial network latency
+    workers = min(len(frames), 6)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        per_frame_results = list(executor.map(lambda f: analyze_single_frame(f, pipe), frames))
 
     # Calculate average fake score across all frames
     if len(per_frame_results) > 0:
