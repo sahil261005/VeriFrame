@@ -39,29 +39,7 @@ def query_huggingface_api(img_array):
     pil_img.save(buffer, format="JPEG")
     image_bytes = buffer.getvalue()
 
-    # Method 1: Try official huggingface_hub InferenceClient
-    try:
-        from huggingface_hub import InferenceClient
-        client = InferenceClient(token=hf_token)
-        predictions = client.image_classification(image=image_bytes, model=HF_MODEL_ID)
-        logger.info(f"HuggingFace InferenceClient predictions: {predictions}")
-        if isinstance(predictions, list):
-            for pred in predictions:
-                # huggingface returns objects or dicts depending on version, handle both
-                if hasattr(pred, "label"):
-                    label_str = pred.label
-                    score_val = pred.score
-                elif isinstance(pred, dict):
-                    label_str = pred.get("label", "")
-                    score_val = pred.get("score", 0.0)
-                else:
-                    continue
-                if "fake" in label_str.lower():
-                    return float(score_val)
-    except Exception as hub_err:
-        logger.info(f"InferenceClient fallback to direct HTTP: {hub_err}")
-
-    # Method 2: Try modern HuggingFace router REST endpoint with explicit Content-Type
+    # Query modern HuggingFace router endpoint with explicit Content-Type
     headers = {
         "Content-Type": "image/jpeg",
         "x-wait-for-model": "true"

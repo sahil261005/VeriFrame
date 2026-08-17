@@ -109,12 +109,12 @@ def router_node(state: VeriFrameState) -> dict:
         reason = "High confidence detected from both Visual and Temporal agents. Skipping LLM to optimize pipeline latency."
     elif status.get("visual") == "fallback":
         decision = "llm_extended"
-        frame_count = 12
-        reason = "Visual agent operating in fallback mode. Dynamically expanding LLM evaluation window to 12 keyframes."
+        frame_count = 7
+        reason = "Visual agent operating in fallback mode. Dynamically expanding LLM evaluation window to 7 keyframes."
     else:
         decision = "llm_normal"
-        frame_count = 8
-        reason = "Routing to LLM ReAct Vision agent with 8 keyframe samples."
+        frame_count = 5
+        reason = "Routing to LLM ReAct Vision agent with 5 keyframe samples."
 
     if job_id:
         event_bus.publish_event(job_id, "LangGraph Conditional Router", reason)

@@ -113,9 +113,13 @@ def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, 
         ts = round(f["timestamp"], 3)
         all_tools_used.update(tools_called)
 
-        # Convert frame to PIL image
+        # Convert frame to compact PIL thumbnail for fast upload and instant tokenization
         rgb = cv2.cvtColor(f["image"], cv2.COLOR_BGR2RGB)
-        pil_img = Image.fromarray(rgb)
+        h, w = rgb.shape[:2]
+        target_w = 256
+        target_h = max(1, int(h * (target_w / w)))
+        small_rgb = cv2.resize(rgb, (target_w, target_h))
+        pil_img = Image.fromarray(small_rgb)
 
         obs_text = f"Frame #{idx + 1} (timestamp: {ts}s):"
         for t_name, res in tool_results.items():
@@ -149,13 +153,23 @@ def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, 
     contents.insert(0, system_prompt)
 
     try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=contents,
-            config=types.GenerateContentConfig(
+        # Disable extended thinking delay to get instant responses in ~1-2 seconds
+        try:
+            gen_config = types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.1,
+                thinking_config=types.ThinkingConfig(thinking_budget=0)
+            )
+        except Exception:
+            gen_config = types.GenerateContentConfig(
                 response_mime_type="application/json",
                 temperature=0.1
             )
+
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=contents,
+            config=gen_config
         )
 
         data = json.loads(response.text)

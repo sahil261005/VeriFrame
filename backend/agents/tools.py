@@ -71,8 +71,13 @@ def check_face_landmarks(frame_data):
         }
 
     img = frame_data["image"]
-    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     h, w = img.shape[:2]
+    
+    # downscale for fast face detection
+    small_w = 240
+    small_h = int(h * (small_w / w))
+    small_img = cv2.resize(img, (small_w, small_h))
+    img_rgb = cv2.cvtColor(small_img, cv2.COLOR_BGR2RGB)
 
     face_mesh = mp.solutions.face_mesh.FaceMesh(
         static_image_mode=True,
@@ -122,12 +127,6 @@ def check_face_landmarks(frame_data):
 
 
 def compare_adjacent_frames(frame_data, all_frames):
-    """
-    tool: compare_adjacent_frames
-    description: Computes dense optical flow between this frame and the next frame in sequence.
-    High flow magnitude indicates rapid motion or a temporal glitch. Returns the average
-    pixel displacement and whether it exceeds the anomaly threshold.
-    """
     timestamp = frame_data["timestamp"]
     curr_img = frame_data["image"]
 
@@ -145,21 +144,25 @@ def compare_adjacent_frames(frame_data, all_frames):
             "summary": "No subsequent frame available for comparison."
         }
 
-    prev_gray = cv2.cvtColor(curr_img, cv2.COLOR_BGR2GRAY)
-    next_gray = cv2.cvtColor(next_frame["image"], cv2.COLOR_BGR2GRAY)
+    # downscale to 160x120 for instant optical flow calculation
+    h, w = curr_img.shape[:2]
+    small_w = 160
+    small_h = max(1, int(h * (small_w / w)))
+    
+    prev_gray = cv2.resize(cv2.cvtColor(curr_img, cv2.COLOR_BGR2GRAY), (small_w, small_h))
+    next_gray = cv2.resize(cv2.cvtColor(next_frame["image"], cv2.COLOR_BGR2GRAY), (small_w, small_h))
 
     flow = cv2.calcOpticalFlowFarneback(
         prev_gray, next_gray, None,
-        pyr_scale=0.5, levels=3, winsize=15,
-        iterations=3, poly_n=5, poly_sigma=1.2, flags=0
+        pyr_scale=0.5, levels=2, winsize=11,
+        iterations=2, poly_n=5, poly_sigma=1.1, flags=0
     )
 
     mag, _ = cv2.cartToPolar(flow[..., 0], flow[..., 1])
     avg_mag = float(np.mean(mag))
     max_mag = float(np.max(mag))
 
-    # anything above 8.0 average is very unusual for adjacent keyframes
-    is_anomalous = avg_mag > 8.0
+    is_anomalous = avg_mag > 6.0
 
     return {
         "tool": "compare_adjacent_frames",
