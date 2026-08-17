@@ -22,17 +22,22 @@ def compute_optical_flow(frames):
 
     results = []
 
-    prev_gray = cv2.cvtColor(frames[0]["image"], cv2.COLOR_BGR2GRAY)
+    # downscale for fast optical flow calculation
+    h, w = frames[0]["image"].shape[:2]
+    small_w = 240
+    small_h = max(1, int(h * (small_w / w)))
+    
+    prev_gray = cv2.resize(cv2.cvtColor(frames[0]["image"], cv2.COLOR_BGR2GRAY), (small_w, small_h))
 
     for i in range(1, len(frames)):
-        curr_gray = cv2.cvtColor(frames[i]["image"], cv2.COLOR_BGR2GRAY)
+        curr_gray = cv2.resize(cv2.cvtColor(frames[i]["image"], cv2.COLOR_BGR2GRAY), (small_w, small_h))
 
         # run farneback to get flow vectors for each pixel
         flow = cv2.calcOpticalFlowFarneback(
             prev_gray, curr_gray,
             None,
-            pyr_scale=0.5, levels=3, winsize=15,
-            iterations=3, poly_n=5, poly_sigma=1.2,
+            pyr_scale=0.5, levels=2, winsize=13,
+            iterations=2, poly_n=5, poly_sigma=1.1,
             flags=0
         )
 
@@ -90,7 +95,13 @@ def check_face_consistency(frames):
     # get landmarks for all frames first
     frame_landmarks = []
     for frame_data in frames:
-        img_rgb = cv2.cvtColor(frame_data["image"], cv2.COLOR_BGR2RGB)
+        img = frame_data["image"]
+        h, w = img.shape[:2]
+        small_w = 240
+        small_h = max(1, int(h * (small_w / w)))
+        small_img = cv2.resize(img, (small_w, small_h))
+        img_rgb = cv2.cvtColor(small_img, cv2.COLOR_BGR2RGB)
+        
         result = face_mesh.process(img_rgb)
 
         if result.multi_face_landmarks and len(result.multi_face_landmarks) > 0:

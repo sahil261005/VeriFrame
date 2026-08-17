@@ -290,24 +290,43 @@ def synthesis_node(state: VeriFrameState) -> dict:
         }
 
 
+from concurrent.futures import ThreadPoolExecutor
+
+
+def cv_parallel_node(state: VeriFrameState) -> dict:
+    """
+    runs Visual Forensics and Temporal Consistency agents simultaneously in parallel.
+    """
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        future_v = pool.submit(visual_node, state)
+        future_t = pool.submit(temporal_node, state)
+        res_v = future_v.result()
+        res_t = future_t.result()
+
+    merged_status = {**res_v.get("agent_status", {}), **res_t.get("agent_status", {})}
+    merged_events = res_v.get("stream_events", []) + res_t.get("stream_events", [])
+
+    return {
+        **res_v,
+        **res_t,
+        "agent_status": merged_status,
+        "stream_events": merged_events
+    }
+
+
 # assemble the state graph
 workflow = StateGraph(VeriFrameState)
 
 # add node functions
-workflow.add_node("visual", visual_node)
-workflow.add_node("temporal", temporal_node)
+workflow.add_node("cv_parallel", cv_parallel_node)
 workflow.add_node("router", router_node)
 workflow.add_node("llm", llm_node)
 workflow.add_node("reflection", reflection_node)
 workflow.add_node("synthesis", synthesis_node)
 
-# build execution flow with parallel start and conditional routing
-workflow.add_edge(START, "visual")
-workflow.add_edge(START, "temporal")
-
-# visual and temporal join together into the router
-workflow.add_edge("visual", "router")
-workflow.add_edge("temporal", "router")
+# build execution flow with true concurrent CV start and conditional routing
+workflow.add_edge(START, "cv_parallel")
+workflow.add_edge("cv_parallel", "router")
 
 # conditional edge from router: either skip LLM straight to synthesis, or route to LLM
 workflow.add_conditional_edges(
