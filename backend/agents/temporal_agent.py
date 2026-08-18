@@ -53,7 +53,8 @@ def compute_optical_flow(frames):
 
         prev_gray = curr_gray
 
-    # flag values higher than 2 standard deviations from average
+    # flag values higher than 2.5 standard deviations from average, with a minimum absolute threshold
+    # to avoid false positives on natural camera pan/tilts where all transitions have low variance
     if len(results) > 0:
         magnitudes = [r["flow_magnitude"] for r in results]
         mean_mag = sum(magnitudes) / len(magnitudes)
@@ -64,10 +65,11 @@ def compute_optical_flow(frames):
             squared_diffs += (m - mean_mag) ** 2
         std_mag = math.sqrt(squared_diffs / len(magnitudes)) if len(magnitudes) > 0 else 0
 
-        threshold = mean_mag + (2 * std_mag)
+        # enforce minimum threshold of 8.0 or mean + 2.5 std
+        threshold = max(8.0, mean_mag + (2.5 * std_mag))
 
         for r in results:
-            if r["flow_magnitude"] > threshold:
+            if r["flow_magnitude"] > threshold and r["flow_magnitude"] > 6.0:
                 r["is_anomalous"] = True
 
     return results

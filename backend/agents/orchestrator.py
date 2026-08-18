@@ -93,48 +93,18 @@ def temporal_node(state: VeriFrameState) -> dict:
 
 def router_node(state: VeriFrameState) -> dict:
     """
-    conditional router node. inspects visual and temporal scores and decides:
-    1. skip_llm: both CV agents are highly confident (>0.75 visual, >0.5 temporal) -> bypass LLM to save latency
-    2. llm_extended: visual agent ran in fallback mode -> increase LLM sample count to 12 frames
-    3. llm_normal: standard path -> 8 frames to LLM
+    conditional router node. inspects visual and temporal scores and decides
+    how many frames to send to the LLM agent. always routes to LLM for
+    multi-agent consensus - never skips it.
     """
     visual_score = state.get("visual_score", 0.0)
     temporal_score = state.get("temporal_score", 0.0)
     status = state.get("agent_status", {})
     job_id = state.get("job_id", "")
 
-    # fast path: if ALL frames scored below 2% fake, the video is clearly authentic
-    # ViT model is authoritative - optical flow on keyframes always looks anomalous
-    # because frames are spread across the video with large time gaps
-    visual_per_frame = state.get("visual_per_frame", [])
-    all_clearly_authentic = len(visual_per_frame) > 0 and all(
-        f.get("fake_confidence", 1.0) < 0.02 for f in visual_per_frame
-    )
-    
-    # also check the reverse: ALL frames unanimously fake (>0.90)
-    all_clearly_fake = len(visual_per_frame) > 0 and all(
-        f.get("fake_confidence", 0.0) > 0.90 for f in visual_per_frame
-    )
+    logger.info(f"Router check: visual_score={visual_score}, temporal_score={temporal_score}")
 
-    logger.info(f"Router check: visual_score={visual_score}, temporal_score={temporal_score}, "
-                f"per_frame_count={len(visual_per_frame)}, all_authentic={all_clearly_authentic}, all_fake={all_clearly_fake}")
-    
-    if all_clearly_authentic:
-        decision = "skip_llm"
-        frame_count = 0
-        reason = "All frames scored below 2% fake confidence. Fast-path verdict: AUTHENTIC."
-        # override scores so synthesis gets the right answer
-        status["llm"] = "skipped"
-    elif all_clearly_fake:
-        decision = "skip_llm"
-        frame_count = 0
-        reason = "All frames scored above 90% fake confidence. Fast-path verdict: FAKE."
-        status["llm"] = "skipped"
-    elif visual_score > 0.60 and temporal_score > 0.30:
-        decision = "skip_llm"
-        frame_count = 0
-        reason = "High confidence detected from both Visual and Temporal agents. Skipping LLM to optimize pipeline latency."
-    elif status.get("visual") == "fallback":
+    if status.get("visual") == "fallback":
         decision = "llm_extended"
         frame_count = 5
         reason = "Visual agent operating in fallback mode. Expanding LLM evaluation window to 5 keyframes."
@@ -150,8 +120,7 @@ def router_node(state: VeriFrameState) -> dict:
 
     return {
         "route_decision": decision,
-        "llm_frame_count": frame_count,
-        "agent_status": status
+        "llm_frame_count": frame_count
     }
 
 

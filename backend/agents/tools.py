@@ -16,8 +16,8 @@ def analyze_noise_pattern(frame_data):
     """
     tool: analyze_noise_pattern
     description: Examines the high-frequency noise residual and edge sharpness of a video frame.
-    Real camera sensors produce natural noise variance (> 0.05). AI generators produce
-    unnaturally smooth noise (< 0.002), which is a strong indicator of synthetic content.
+    Real camera sensors produce natural noise variance (> 0.00010). AI generators produce
+    unnaturally smooth noise (< 0.00003), which is a strong indicator of synthetic content.
     
     Returns noise variance, laplacian variance (edge sharpness), and a risk assessment.
     """
@@ -27,32 +27,33 @@ def analyze_noise_pattern(frame_data):
     # compute laplacian variance (measures edge sharpness)
     laplacian_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
-    # compute high-frequency noise residual
-    # blur the image and subtract from original to isolate noise
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    noise = gray.astype(float) - blurred.astype(float)
+    # compute normalized high-frequency noise residual (0.0 to 1.0 scale)
+    norm_gray = gray.astype(np.float32) / 255.0
+    blurred = cv2.GaussianBlur(norm_gray, (5, 5), 0)
+    noise = norm_gray - blurred
     noise_var = float(np.var(noise))
 
-    # assess risk level
-    risk = "low"
-    if noise_var < 0.002:
-        risk = "high"  # suspiciously clean noise = likely AI-generated
-    elif noise_var < 0.01:
-        risk = "medium"
+    # assess risk level based on normalized noise variance
+    if noise_var < 0.00003:
+        risk = "high (unnaturally smooth noise, characteristic of AI generation)"
+    elif noise_var < 0.00008:
+        risk = "medium (low sensor noise)"
+    else:
+        risk = "low (natural camera sensor noise pattern)"
 
     edge_risk = "normal"
-    if laplacian_var < 80.0:
-        edge_risk = "blurry (potential face blending)"
-    elif laplacian_var > 600.0:
+    if laplacian_var < 60.0:
+        edge_risk = "soft/blurry (potential face blending boundary)"
+    elif laplacian_var > 700.0:
         edge_risk = "oversharpened (potential AI artifact)"
 
     return {
         "tool": "analyze_noise_pattern",
-        "noise_variance": round(noise_var, 6),
+        "noise_variance": round(noise_var, 8),
         "laplacian_variance": round(laplacian_var, 2),
         "noise_risk": risk,
         "edge_assessment": edge_risk,
-        "summary": f"Noise variance: {noise_var:.6f} ({risk} risk). Edge sharpness: {laplacian_var:.2f} ({edge_risk})."
+        "summary": f"Normalized noise variance: {noise_var:.7f} ({risk}). Edge sharpness: {laplacian_var:.1f} ({edge_risk})."
     }
 
 
@@ -144,9 +145,9 @@ def compare_adjacent_frames(frame_data, all_frames):
             "summary": "No subsequent frame available for comparison."
         }
 
-    # downscale to 160x120 for instant optical flow calculation
+    # downscale to 240px width for fast optical flow
     h, w = curr_img.shape[:2]
-    small_w = 160
+    small_w = 240
     small_h = max(1, int(h * (small_w / w)))
     
     prev_gray = cv2.resize(cv2.cvtColor(curr_img, cv2.COLOR_BGR2GRAY), (small_w, small_h))
@@ -154,23 +155,25 @@ def compare_adjacent_frames(frame_data, all_frames):
 
     flow = cv2.calcOpticalFlowFarneback(
         prev_gray, next_gray, None,
-        pyr_scale=0.5, levels=2, winsize=11,
+        pyr_scale=0.5, levels=2, winsize=13,
         iterations=2, poly_n=5, poly_sigma=1.1, flags=0
     )
 
     mag, _ = cv2.cartToPolar(flow[..., 0], flow[..., 1])
     avg_mag = float(np.mean(mag))
-    max_mag = float(np.max(mag))
+    std_mag = float(np.std(mag))
 
-    is_anomalous = avg_mag > 6.0
+    time_delta = max(0.1, next_frame["timestamp"] - timestamp)
+    norm_mag = avg_mag / time_delta
+    is_anomalous = (std_mag > 8.0) or (norm_mag > 25.0)
 
     return {
         "tool": "compare_adjacent_frames",
         "has_next_frame": True,
-        "avg_flow_magnitude": round(avg_mag, 4),
-        "max_flow_magnitude": round(max_mag, 4),
+        "avg_flow_magnitude": round(avg_mag, 2),
+        "flow_std": round(std_mag, 2),
         "is_anomalous": is_anomalous,
-        "summary": f"Optical flow avg: {avg_mag:.4f}, max: {max_mag:.4f}. {'Anomalous motion detected!' if is_anomalous else 'Motion appears normal.'}"
+        "summary": f"Optical flow (delta={time_delta:.2f}s): avg={avg_mag:.2f}, std={std_mag:.2f}. {'Localized warping or jump detected.' if is_anomalous else 'Smooth motion transition.'}"
     }
 
 

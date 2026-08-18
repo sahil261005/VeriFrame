@@ -113,12 +113,12 @@ def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, 
         ts = round(f["timestamp"], 3)
         all_tools_used.update(tools_called)
 
-        # Convert frame to compact PIL thumbnail for fast upload and instant tokenization
+        # Convert frame to clear 480px width for precise forensic inspection of fine textures
         rgb = cv2.cvtColor(f["image"], cv2.COLOR_BGR2RGB)
         h, w = rgb.shape[:2]
-        target_w = 256
+        target_w = 480
         target_h = max(1, int(h * (target_w / w)))
-        small_rgb = cv2.resize(rgb, (target_w, target_h))
+        small_rgb = cv2.resize(rgb, (target_w, target_h), interpolation=cv2.INTER_AREA)
         pil_img = Image.fromarray(small_rgb)
 
         obs_text = f"Frame #{idx + 1} (timestamp: {ts}s):"
@@ -132,18 +132,34 @@ def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, 
 
     system_prompt = (
         "You are an expert video forensics analyst operating in a ReAct multi-agent framework.\n"
-        "Examine the attached chronological video keyframes for AI generation (Sora, Runway, Pika, Kling) or deepfake face manipulation.\n\n"
-        "Forensic Tool Observations:\n" + "\n\n".join(tool_summaries) + "\n\n"
+        "Examine the attached chronological video keyframes to detect whether this video is AUTHENTIC or AI-GENERATED/MANIPULATED.\n\n"
+        "FORENSIC DETECTION CRITERIA:\n"
+        "1. Generative AI Video (Sora, Kling, Runway Gen-3, Luma, Pika, Stable Video):\n"
+        "   - Waxy, overly smooth, or plastic skin texture lacking natural pores and sensor grain.\n"
+        "   - Warping, morphing, or drifting background architecture, text gibberish, or impossible geometry.\n"
+        "   - Anatomical glitches: unnatural hands/fingers, distorted teeth, asymmetric pupils, melting limbs.\n"
+        "   - Physics anomalies: unnatural fluid/smoke motion, inconsistent shadows, or gravity violations.\n"
+        "2. Face-Swap / Deepfake Manipulation:\n"
+        "   - Blurry boundary seams around the face oval, color/lighting mismatch between face and neck.\n"
+        "   - Unnatural or frozen eye blinking, jittery landmark shifts across frames.\n"
+        "3. Authentic Camera Footage:\n"
+        "   - Natural optical motion blur adhering to camera shutter speed.\n"
+        "   - Authentic ISO sensor noise grain, realistic human micro-expressions, consistent physical lighting.\n\n"
+        "AUTOMATED FORENSIC TOOL OBSERVATIONS:\n" + "\n\n".join(tool_summaries) + "\n\n"
+        "SCORING GUIDELINE:\n"
+        "- 0.70 to 1.00: Clear AI generation or deepfake manipulation detected.\n"
+        "- 0.40 to 0.65: Suspicious or ambiguous visual artifacts.\n"
+        "- 0.00 to 0.25: Authentic real-world camera recording.\n"
     )
 
     if reflection_prompt:
-        system_prompt += f"\n{reflection_prompt}\n"
+        system_prompt += f"\nSelf-Correction Feedback: {reflection_prompt}\n"
 
     system_prompt += (
         "\nProvide your analysis as a JSON object with this exact structure:\n"
         "{\n"
-        '  "overall_fake_score": <float between 0.0 (authentic) and 1.0 (manipulated)>,\n'
-        '  "summary_reasoning": "<2-3 sentence overview explaining why the video is authentic or manipulated>",\n'
+        '  "overall_fake_score": <float between 0.00 (authentic) and 1.00 (manipulated)>,\n'
+        '  "summary_reasoning": "<2-3 sentence overview explaining the forensic evidence for your verdict>",\n'
         '  "frame_explanations": {\n'
         '     "<timestamp_as_string>": "<1-2 sentence forensic observation for this specific frame>"\n'
         "  }\n"
@@ -153,7 +169,7 @@ def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, 
     contents.insert(0, system_prompt)
 
     try:
-        # use gemini-3.5-flash-lite for instant responses (~2-3 seconds)
+        # use gemini-3.5-flash-lite for fast, high-accuracy multi-image reasoning (~2-3s)
         gen_config = types.GenerateContentConfig(
             response_mime_type="application/json",
             temperature=0.1

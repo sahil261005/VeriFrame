@@ -1,52 +1,58 @@
 def compute_verdict(visual_score, temporal_score, llm_score, agent_status, metadata=None):
-    # when LLM was skipped via fast-path, the visual ViT model is the authority
-    # temporal optical flow is unreliable on keyframe-sampled videos (big time gaps = big motion = false positives)
-    if agent_status.get("llm") == "skipped":
-        final_confidence = visual_score
-        normalized_weights = {"visual": 1.0, "temporal": 0.0, "llm": 0.0}
-    else:
+    # temporal optical flow is unreliable on keyframe-sampled videos
+    # (big time gaps between sampled frames = large pixel motion = false positives)
+    # so it gets lower weight. visual ViT + Gemini LLM are the main signals.
+    base_weights = {
+        "visual": 0.45,
+        "temporal": 0.15,
+        "llm": 0.40
+    }
+
+    if llm_score > 0.60:
         base_weights = {
-            "visual": 0.40,
-            "temporal": 0.30,
-            "llm": 0.30
+            "visual": 0.20,
+            "temporal": 0.10,
+            "llm": 0.70
         }
+    elif agent_status.get("visual") == "fallback":
+        base_weights["visual"] = 0.10
+        base_weights["temporal"] = 0.15
+        base_weights["llm"] = 0.75
+    
+    scores = {
+        "visual": visual_score,
+        "temporal": temporal_score,
+        "llm": llm_score
+    }
 
-        if llm_score > 0.60:
-            base_weights = {
-                "visual": 0.20,
-                "temporal": 0.20,
-                "llm": 0.60
-            }
-        elif agent_status.get("visual") == "fallback":
-            base_weights["visual"] = 0.10
-            base_weights["llm"] = 0.60
-        
-        scores = {
-            "visual": visual_score,
-            "temporal": temporal_score,
-            "llm": llm_score
-        }
+    active_weights = {}
+    total_active_base_weight = 0.0
 
-        active_weights = {}
-        total_active_base_weight = 0.0
+    for name, weight in base_weights.items():
+        if agent_status.get(name) != "failed":
+            active_weights[name] = weight
+            total_active_base_weight += weight
 
-        for name, weight in base_weights.items():
-            if agent_status.get(name) != "failed":
-                active_weights[name] = weight
-                total_active_base_weight += weight
+    if total_active_base_weight == 0.0:
+        for name in base_weights:
+            active_weights[name] = 1.0 / len(base_weights)
+        total_active_base_weight = 1.0
 
-        if total_active_base_weight == 0.0:
-            for name in base_weights:
-                active_weights[name] = 1.0 / len(base_weights)
-            total_active_base_weight = 1.0
+    normalized_weights = {}
+    for name, weight in active_weights.items():
+        normalized_weights[name] = weight / total_active_base_weight
 
-        normalized_weights = {}
-        for name, weight in active_weights.items():
-            normalized_weights[name] = weight / total_active_base_weight
+    final_confidence = 0.0
+    for name, weight in normalized_weights.items():
+        final_confidence += scores[name] * weight
 
-        final_confidence = 0.0
-        for name, weight in normalized_weights.items():
-            final_confidence += scores[name] * weight
+    # Domain-specific detector alignment:
+    # 1. ViT model specializes in facial deepfake boundary artifacts (FaceForensics)
+    # 2. Gemini LLM Vision specializes in modern generative AI diffusion (Sora/Kling/Runway)
+    # If either specialized detector is confident (>= 0.55), elevate confidence to reflect detection.
+    max_specialized = max(visual_score, llm_score)
+    if max_specialized >= 0.55:
+        final_confidence = max(final_confidence, max_specialized * 0.85)
 
     if metadata:
         robustness = metadata.get("robustness_score", 1.0)
@@ -54,7 +60,7 @@ def compute_verdict(visual_score, temporal_score, llm_score, agent_status, metad
             diff = final_confidence - 0.5
             final_confidence = 0.5 + diff * robustness
 
-    if final_confidence > 0.50:
+    if final_confidence >= 0.48:
         verdict = "MANIPULATED"
     elif final_confidence < 0.30:
         verdict = "AUTHENTIC"
