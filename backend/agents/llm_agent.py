@@ -153,21 +153,14 @@ def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, 
     contents.insert(0, system_prompt)
 
     try:
-        # Disable extended thinking delay to get instant responses in ~1-2 seconds
-        try:
-            gen_config = types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0.1,
-                thinking_config=types.ThinkingConfig(thinking_budget=0)
-            )
-        except Exception:
-            gen_config = types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0.1
-            )
+        # use gemini-2.0-flash-lite for instant responses (~2-3 seconds vs ~11s for 2.5-flash)
+        gen_config = types.GenerateContentConfig(
+            response_mime_type="application/json",
+            temperature=0.1
+        )
 
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-2.0-flash-lite",
             contents=contents,
             config=gen_config
         )

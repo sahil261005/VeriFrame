@@ -103,18 +103,29 @@ def router_node(state: VeriFrameState) -> dict:
     status = state.get("agent_status", {})
     job_id = state.get("job_id", "")
 
-    if visual_score > 0.75 and temporal_score > 0.50:
+    # fast path: if ALL frames scored below 2% fake, the video is clearly authentic
+    # no need to waste 11 seconds on Gemini for confirmation
+    visual_per_frame = state.get("visual_per_frame", [])
+    all_clearly_authentic = len(visual_per_frame) > 0 and all(
+        f.get("fake_confidence", 1.0) < 0.02 for f in visual_per_frame
+    )
+    
+    if all_clearly_authentic and temporal_score < 0.15:
+        decision = "skip_llm"
+        frame_count = 0
+        reason = "All frames scored below 2% fake confidence with minimal temporal anomalies. Fast-path verdict: AUTHENTIC."
+    elif visual_score > 0.60 and temporal_score > 0.30:
         decision = "skip_llm"
         frame_count = 0
         reason = "High confidence detected from both Visual and Temporal agents. Skipping LLM to optimize pipeline latency."
     elif status.get("visual") == "fallback":
         decision = "llm_extended"
-        frame_count = 7
-        reason = "Visual agent operating in fallback mode. Dynamically expanding LLM evaluation window to 7 keyframes."
+        frame_count = 5
+        reason = "Visual agent operating in fallback mode. Expanding LLM evaluation window to 5 keyframes."
     else:
         decision = "llm_normal"
-        frame_count = 5
-        reason = "Routing to LLM ReAct Vision agent with 5 keyframe samples."
+        frame_count = 4
+        reason = "Routing to LLM ReAct Vision agent with 4 keyframe samples."
 
     if job_id:
         event_bus.publish_event(job_id, "LangGraph Conditional Router", reason)
