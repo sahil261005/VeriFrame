@@ -123,10 +123,13 @@ def router_node(state: VeriFrameState) -> dict:
         decision = "skip_llm"
         frame_count = 0
         reason = "All frames scored below 2% fake confidence. Fast-path verdict: AUTHENTIC."
+        # override scores so synthesis gets the right answer
+        status["llm"] = "skipped"
     elif all_clearly_fake:
         decision = "skip_llm"
         frame_count = 0
         reason = "All frames scored above 90% fake confidence. Fast-path verdict: FAKE."
+        status["llm"] = "skipped"
     elif visual_score > 0.60 and temporal_score > 0.30:
         decision = "skip_llm"
         frame_count = 0
@@ -147,7 +150,8 @@ def router_node(state: VeriFrameState) -> dict:
 
     return {
         "route_decision": decision,
-        "llm_frame_count": frame_count
+        "llm_frame_count": frame_count,
+        "agent_status": status
     }
 
 
