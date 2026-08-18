@@ -91,7 +91,7 @@ def run_tools_for_frame(frame_data, all_frames=None, metadata=None):
 
 
 def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, all_frames=None, api_key=None):
-    # sends frames to Gemini 2.5 Flash for multi-image analysis and gets back a JSON verdict
+    # sends frames to Gemini 3.5 Flash-Lite for multi-image analysis and gets back a JSON verdict
     from google import genai
     from google.genai import types
 
@@ -171,7 +171,7 @@ def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, 
         frame_explanations = data.get("frame_explanations", {})
 
         tools_list = sorted(list(all_tools_used))
-        reasoning = f"Gemini 2.5 Flash batch-analyzed {len(suspicious_frames)} frames (Tools: {', '.join(tools_list)}): {summary_reasoning}"
+        reasoning = f"Gemini 3.5 Flash-Lite batch-analyzed {len(suspicious_frames)} frames (Tools: {', '.join(tools_list)}): {summary_reasoning}"
 
         return reasoning, frame_explanations, round(overall_score, 4), tools_list
 
@@ -274,7 +274,7 @@ def analyze_with_llm(suspicious_frames, reflection_prompt="", metadata=None, all
     gemini_key = os.environ.get("GEMINI_API_KEY")
     if gemini_key:
         try:
-            logger.info("Running visual reasoning with Google Gemini 2.5 Flash...")
+            logger.info("Running visual reasoning with Google Gemini 3.5 Flash-Lite...")
             res = analyze_with_gemini(
                 suspicious_frames,
                 reflection_prompt=reflection_prompt,
