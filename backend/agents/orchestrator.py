@@ -110,7 +110,7 @@ def router_node(state: VeriFrameState) -> dict:
         f.get("fake_confidence", 1.0) < 0.02 for f in visual_per_frame
     )
     
-    if all_clearly_authentic and temporal_score < 0.15:
+    if all_clearly_authentic and temporal_score < 0.35:
         decision = "skip_llm"
         frame_count = 0
         reason = "All frames scored below 2% fake confidence with minimal temporal anomalies. Fast-path verdict: AUTHENTIC."
