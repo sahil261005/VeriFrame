@@ -104,14 +104,20 @@ def router_node(state: VeriFrameState) -> dict:
 
     logger.info(f"Router check: visual_score={visual_score}, temporal_score={temporal_score}")
 
+    # simple logic: if visual is fallback, use 4 frames for safety
     if status.get("visual") == "fallback":
         decision = "llm_extended"
-        frame_count = 5
-        reason = "Visual agent operating in fallback mode. Expanding LLM evaluation window to 5 keyframes."
+        frame_count = 4
+        reason = "Visual agent operating in fallback mode. Evaluating 4 keyframes with LLM."
+    # if visual and temporal both have clear high confidence (>0.85) or both clear low (<0.15)
+    elif (visual_score > 0.85 and temporal_score > 0.60) or (visual_score < 0.15 and temporal_score < 0.15):
+        decision = "llm_fast_consensus"
+        frame_count = 2
+        reason = "Strong CV agreement detected. Running rapid 2-keyframe LLM verification."
     else:
         decision = "llm_normal"
-        frame_count = 4
-        reason = "Routing to LLM ReAct Vision agent with 4 keyframe samples."
+        frame_count = 3
+        reason = "Routing to LLM ReAct Vision agent with 3 keyframe samples."
 
     if job_id:
         event_bus.publish_event(job_id, "LangGraph Conditional Router", reason)

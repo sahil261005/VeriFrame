@@ -85,6 +85,7 @@ def check_face_consistency(frames):
     if len(frames) < 2:
         return []
 
+    # initialize face mesh once for the entire sequence
     face_mesh = mp.solutions.face_mesh.FaceMesh(
         static_image_mode=True,
         max_num_faces=1,
@@ -96,39 +97,38 @@ def check_face_consistency(frames):
 
     # get landmarks for all frames first
     frame_landmarks = []
-    for frame_data in frames:
-        img = frame_data["image"]
-        h, w = img.shape[:2]
-        small_w = 240
-        small_h = max(1, int(h * (small_w / w)))
-        small_img = cv2.resize(img, (small_w, small_h))
-        img_rgb = cv2.cvtColor(small_img, cv2.COLOR_BGR2RGB)
-        
-        result = face_mesh.process(img_rgb)
+    try:
+        for frame_data in frames:
+            img = frame_data["image"]
+            h, w = img.shape[:2]
+            small_w = 240
+            small_h = max(1, int(h * (small_w / w)))
+            small_img = cv2.resize(img, (small_w, small_h))
+            img_rgb = cv2.cvtColor(small_img, cv2.COLOR_BGR2RGB)
+            
+            result = face_mesh.process(img_rgb)
 
-        if result.multi_face_landmarks and len(result.multi_face_landmarks) > 0:
-            landmarks = result.multi_face_landmarks[0]
-            h, w = frame_data["image"].shape[:2]
+            if result.multi_face_landmarks and len(result.multi_face_landmarks) > 0:
+                landmarks = result.multi_face_landmarks[0]
+                points = {}
+                for idx in key_points:
+                    lm = landmarks.landmark[idx]
+                    # convert normalized scale to pixels
+                    points[idx] = (lm.x * w, lm.y * h)
 
-            points = {}
-            for idx in key_points:
-                lm = landmarks.landmark[idx]
-                # convert normalized scale to pixels
-                points[idx] = (lm.x * w, lm.y * h)
-
-            frame_landmarks.append({
-                "timestamp": frame_data["timestamp"],
-                "points": points,
-                "face_found": True
-            })
-        else:
-            frame_landmarks.append({
-                "timestamp": frame_data["timestamp"],
-                "points": {},
-                "face_found": False
-            })
-
-    face_mesh.close()
+                frame_landmarks.append({
+                    "timestamp": frame_data["timestamp"],
+                    "points": points,
+                    "face_found": True
+                })
+            else:
+                frame_landmarks.append({
+                    "timestamp": frame_data["timestamp"],
+                    "points": {},
+                    "face_found": False
+                })
+    finally:
+        face_mesh.close()
 
     # count how many frames had a face
     faces_found = 0

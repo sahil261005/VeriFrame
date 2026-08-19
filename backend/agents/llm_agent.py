@@ -101,7 +101,6 @@ def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, 
     all_tools_used = set()
 
     # run tools on all frames at once using threads (they are independent so this is safe)
-    from concurrent.futures import ThreadPoolExecutor
     workers = min(len(suspicious_frames), 6)
     with ThreadPoolExecutor(max_workers=workers) as pool:
         tool_results_list = list(pool.map(
@@ -113,10 +112,10 @@ def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, 
         ts = round(f["timestamp"], 3)
         all_tools_used.update(tools_called)
 
-        # Convert frame to clear 480px width for precise forensic inspection of fine textures
+        # Convert frame to fast 384px width JPEG for instant multi-image ingestion
         rgb = cv2.cvtColor(f["image"], cv2.COLOR_BGR2RGB)
         h, w = rgb.shape[:2]
-        target_w = 480
+        target_w = 384
         target_h = max(1, int(h * (target_w / w)))
         small_rgb = cv2.resize(rgb, (target_w, target_h), interpolation=cv2.INTER_AREA)
         pil_img = Image.fromarray(small_rgb)
@@ -197,79 +196,93 @@ def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, 
         return None
 
 
+def process_single_groq_frame(f, client, all_frames, metadata, reflection_prompt):
+    # helper for running one frame through Groq in parallel
+    ts = round(f["timestamp"], 3)
+    img_array = f["image"]
+
+    tool_results, tools_called = run_tools_for_frame(f, all_frames=all_frames, metadata=metadata)
+
+    # resize to 384 for fast base64 encoding and transfer
+    rgb = cv2.cvtColor(img_array, cv2.COLOR_BGR2RGB)
+    h, w = rgb.shape[:2]
+    small_rgb = cv2.resize(rgb, (384, max(1, int(h * (384 / w)))))
+    pil_img = Image.fromarray(small_rgb)
+
+    buffered = io.BytesIO()
+    pil_img.save(buffered, format="JPEG", quality=80)
+    base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
+
+    tool_obs_text = ""
+    for tool_key, res in tool_results.items():
+        if "summary" in res:
+            tool_obs_text += f"\n- Tool [{res.get('tool', tool_key)}]: {res['summary']}"
+
+    prompt = (
+        "You are a forensic video expert operating in a ReAct multi-agent framework.\n"
+        "Analyze this frame for AI generation or deepfake manipulation.\n"
+        f"Automated Tool Observations:{tool_obs_text}\n"
+    )
+    if reflection_prompt:
+        prompt += f"\n{reflection_prompt}\n"
+    prompt += (
+        "\nCRITICAL requirement: Start your response with: [SCORE: X.XX] "
+        "(0.00 is authentic, 1.00 is fully AI-generated/fake). Then, give a 2-sentence explanation."
+    )
+
+    score = 0.1
+    explanation = "Analysis completed."
+
+    try:
+        response = client.chat.completions.create(
+            model="meta-llama/llama-4-scout-17b-16e-instruct",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}},
+                    ],
+                }
+            ],
+        )
+        response_text = response.choices[0].message.content or ""
+        explanation = response_text
+
+        match = re.search(r'\[?SCORE:\s*([0-9.]+)(?:/1\.0)?\]?', response_text, re.IGNORECASE)
+        if match:
+            try:
+                score = float(match.group(1))
+                explanation = re.sub(r'\[?SCORE:\s*[0-9.]+(?:/1\.0)?\]?', '', response_text, flags=re.IGNORECASE).strip()
+            except Exception:
+                pass
+    except Exception as err:
+        logger.error(f"Groq API error on frame t={ts}s: {err}")
+
+    return str(ts), explanation, score, tools_called
+
+
 def analyze_with_groq(suspicious_frames, reflection_prompt="", metadata=None, all_frames=None, api_key=None):
-    # fallback: sends frames one by one to Groq Llama if Gemini is unavailable
+    # fallback: sends frames to Groq in parallel threads so we dont wait 10+ seconds sequentially
     from groq import Groq
     client = Groq(api_key=api_key)
     frame_explanations = {}
     scores_list = []
-    num_analyzed = 0
     all_tools_used = set()
 
-    for f in suspicious_frames:
-        ts = round(f["timestamp"], 3)
-        img_array = f["image"]
+    workers = min(len(suspicious_frames), 4)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = list(pool.map(
+            lambda f: process_single_groq_frame(f, client, all_frames, metadata, reflection_prompt),
+            suspicious_frames
+        ))
 
-        tool_results, tools_called = run_tools_for_frame(f, all_frames=all_frames, metadata=metadata)
+    for ts_str, explanation, score, tools_called in results:
+        frame_explanations[ts_str] = explanation
+        scores_list.append(score)
         all_tools_used.update(tools_called)
 
-        rgb = cv2.cvtColor(img_array, cv2.COLOR_BGR2RGB)
-        pil_img = Image.fromarray(rgb)
-
-        buffered = io.BytesIO()
-        pil_img.save(buffered, format="JPEG")
-        base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
-
-        tool_obs_text = ""
-        for tool_key, res in tool_results.items():
-            if "summary" in res:
-                tool_obs_text += f"\n- Tool [{res.get('tool', tool_key)}]: {res['summary']}"
-
-        prompt = (
-            "You are a forensic video expert operating in a ReAct multi-agent framework.\n"
-            "Analyze this frame for AI generation or deepfake manipulation.\n"
-            f"Automated Tool Observations:{tool_obs_text}\n"
-        )
-        if reflection_prompt:
-            prompt += f"\n{reflection_prompt}\n"
-        prompt += (
-            "\nCRITICAL requirement: Start your response with: [SCORE: X.XX] "
-            "(0.00 is authentic, 1.00 is fully AI-generated/fake). Then, give a 2-sentence explanation."
-        )
-
-        try:
-            response = client.chat.completions.create(
-                model="meta-llama/llama-4-scout-17b-16e-instruct",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}},
-                        ],
-                    }
-                ],
-            )
-            response_text = response.choices[0].message.content or ""
-            score = 0.1
-            explanation = response_text
-
-            match = re.search(r'\[?SCORE:\s*([0-9.]+)(?:/1\.0)?\]?', response_text, re.IGNORECASE)
-            if match:
-                try:
-                    score = float(match.group(1))
-                    explanation = re.sub(r'\[?SCORE:\s*[0-9.]+(?:/1\.0)?\]?', '', response_text, flags=re.IGNORECASE).strip()
-                except Exception:
-                    pass
-
-            ts_str = str(ts)
-            frame_explanations[ts_str] = explanation
-            scores_list.append(score)
-            num_analyzed += 1
-        except Exception as err:
-            logger.error(f"Groq API error on frame t={ts}s: {err}")
-
-    if num_analyzed > 0:
+    if scores_list:
         sorted_scores = sorted(scores_list, reverse=True)
         top_scores = sorted_scores[:3]
         llm_score = sum(top_scores) / len(top_scores)
@@ -277,7 +290,7 @@ def analyze_with_groq(suspicious_frames, reflection_prompt="", metadata=None, al
         llm_score = 0.0
 
     tools_used_list = sorted(list(all_tools_used))
-    llm_reasoning = f"Groq analyzed {num_analyzed} frames (Tools: {', '.join(tools_used_list)}). Top confidence: {round(llm_score, 2)}"
+    llm_reasoning = f"Groq parallel-analyzed {len(suspicious_frames)} frames (Tools: {', '.join(tools_used_list)}). Top confidence: {round(llm_score, 2)}"
     return llm_reasoning, frame_explanations, round(llm_score, 4), tools_used_list
 
 

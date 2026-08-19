@@ -40,3 +40,8 @@ backend/download.py
 # Test data & evaluation folders
 backend/test_data/
 backend/temp_eval/
+
+# Graphify & local agent configurations
+graphify-out/
+.graphify*
+.agents/
