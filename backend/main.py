@@ -128,7 +128,7 @@ def process_video_task(job_id: str, temp_path: str, meta: dict):
         logger.info(f"background processing started for job {job_id}...")
         
         # 1. grab sample keyframes from the video and resize them in memory
-        frames = preprocessing.extract_frames(temp_path, interval=1.0, target_height=480, max_frames=8)
+        frames = preprocessing.extract_frames(temp_path, interval=1.0, target_height=480, max_frames=6)
         logger.info(f"extracted {len(frames)} keyframes for job {job_id}.")
         
         # 2. run langgraph multi-agent pipeline

@@ -27,6 +27,10 @@ def load_model():
         return "hf_api"
 
 
+# persistent session for connection pooling & TLS keep-alive
+_http_session = requests.Session()
+
+
 def query_huggingface_api(img_array):
     # sends a frame to HuggingFace cloud API and returns the fake score
     hf_token = os.environ.get("HF_TOKEN")
@@ -36,7 +40,7 @@ def query_huggingface_api(img_array):
     pil_img = Image.fromarray(rgb)
 
     buffer = io.BytesIO()
-    pil_img.save(buffer, format="JPEG")
+    pil_img.save(buffer, format="JPEG", quality=85)
     image_bytes = buffer.getvalue()
 
     # Query modern HuggingFace router endpoint with explicit Content-Type
@@ -48,7 +52,7 @@ def query_huggingface_api(img_array):
         headers["Authorization"] = f"Bearer {hf_token}"
 
     try:
-        response = requests.post(HF_ROUTER_URL, headers=headers, data=image_bytes, timeout=12)
+        response = _http_session.post(HF_ROUTER_URL, headers=headers, data=image_bytes, timeout=8)
         if response.status_code == 200:
             predictions = response.json()
             logger.info(f"HuggingFace API response: {predictions}")

@@ -212,8 +212,8 @@ def downscale_video(file_path, output_path, target_height=480):
     out.release()
     return output_path
 
-# pull sample frames from video using direct frame seeking (fast, zero sequential decoding lag)
-def extract_frames(file_path, interval=0.8, target_height=480, max_frames=12):
+# pull sample frames using fast sequential grab (avoids slow container seek stalls)
+def extract_frames(file_path, interval=1.0, target_height=480, max_frames=6):
     cap = cv2.VideoCapture(file_path)
     if not cap.isOpened():
         raise ValueError("could not open video to extract frames")
@@ -225,39 +225,43 @@ def extract_frames(file_path, interval=0.8, target_height=480, max_frames=12):
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     duration = total_frames / fps if fps > 0 else 10.0
     
-    # calculate target frame indices directly across the video duration
-    num_samples = min(max_frames, max(6, int(duration / interval)))
+    # pick 5-6 evenly spaced keyframes across the whole video
+    num_samples = min(max_frames, max(4, int(duration / interval)))
     if total_frames > num_samples and num_samples > 0:
         step = max(1, total_frames // num_samples)
-        target_indices = [min(i * step, total_frames - 1) for i in range(num_samples)]
+        target_indices = set(min(i * step, total_frames - 1) for i in range(num_samples))
     else:
-        target_indices = list(range(max(1, total_frames)))
+        target_indices = set(range(max(1, total_frames)))
         
     frames = []
+    current_idx = 0
     
-    for f_idx in target_indices:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, f_idx)
-        ret, frame = cap.read()
-        if not ret or frame is None:
-            continue
+    while cap.isOpened() and len(frames) < num_samples:
+        # cap.grab() is extremely fast (skips decoding non-target frames)
+        grabbed = cap.grab()
+        if not grabbed:
+            break
             
-        h, w = frame.shape[:2]
-        # downscale in-memory if needed
-        if h > target_height:
-            aspect = w / h
-            new_w = int(target_height * aspect)
-            if new_w % 2 != 0:
-                new_w += 1
-            frame = cv2.resize(frame, (new_w, target_height), interpolation=cv2.INTER_AREA)
-            
-        timestamp = f_idx / fps
-        noise_var = compute_noise_residual(frame)
-        frames.append({
-            "frame_index": f_idx,
-            "timestamp": round(timestamp, 3),
-            "image": frame,
-            "noise_variance": round(noise_var, 4)
-        })
+        if current_idx in target_indices:
+            ret, frame = cap.retrieve()
+            if ret and frame is not None:
+                h, w = frame.shape[:2]
+                if h > target_height:
+                    aspect = w / h
+                    new_w = int(target_height * aspect)
+                    if new_w % 2 != 0:
+                        new_w += 1
+                    frame = cv2.resize(frame, (new_w, target_height), interpolation=cv2.INTER_AREA)
+                    
+                timestamp = current_idx / fps
+                noise_var = compute_noise_residual(frame)
+                frames.append({
+                    "frame_index": current_idx,
+                    "timestamp": round(timestamp, 3),
+                    "image": frame,
+                    "noise_variance": round(noise_var, 4)
+                })
+        current_idx += 1
         
     cap.release()
     return frames
