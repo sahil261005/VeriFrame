@@ -40,7 +40,7 @@ function StatusFeed({ jobId, onAnalysisComplete }) {
       }
     );
 
-    // 2. Backup status polling (every 2.5s) to guarantee completion redirect
+    // 2. Backup status polling (every 1s) to guarantee instantaneous completion redirect
     const checkStatus = async () => {
       try {
         const data = await analysisService.getAnalysis(jobId);
@@ -57,7 +57,7 @@ function StatusFeed({ jobId, onAnalysisComplete }) {
       }
     };
 
-    intervalId = setInterval(checkStatus, 2500);
+    intervalId = setInterval(checkStatus, 1000);
 
     return () => {
       if (eventSource) eventSource.close();
@@ -68,6 +68,7 @@ function StatusFeed({ jobId, onAnalysisComplete }) {
   const defaultSteps = [
     { agent: 'Visual Forensics', label: 'Spatial artifact & noise inspection' },
     { agent: 'Temporal Agent', label: 'Optical flow & facial landmark geometry tracking' },
+    { agent: 'Audio Forensics', label: 'Spectral cutoff, voice cadence & lip-sync' },
     { agent: 'Router Node', label: 'Dynamic confidence routing (skip/extend LLM)' },
     { agent: 'Cognitive Reasoning', label: 'ReAct tool execution & LLM vision analysis' },
     { agent: 'Reflection Node', label: 'Self-correction & reasoning alignment audit' },

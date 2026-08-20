@@ -131,8 +131,8 @@ def process_video_task(job_id: str, temp_path: str, meta: dict):
         frames = preprocessing.extract_frames(temp_path, interval=1.0, target_height=480, max_frames=6)
         logger.info(f"extracted {len(frames)} keyframes for job {job_id}.")
         
-        # 2. run langgraph multi-agent pipeline
-        pipeline_output = run_pipeline(frames, meta, job_id=job_id)
+        # 2. run langgraph multi-agent pipeline with video path for audio forensics
+        pipeline_output = run_pipeline(frames, meta, job_id=job_id, video_path=temp_path)
         logger.info(f"langgraph pipeline completed for job {job_id}.")
         
         # 4. load job to save outputs

@@ -1,28 +1,53 @@
-def compute_verdict(visual_score, temporal_score, llm_score, agent_status, metadata=None):
-    # temporal optical flow is unreliable on keyframe-sampled videos
-    # (big time gaps between sampled frames = large pixel motion = false positives)
-    # so it gets lower weight. visual ViT + Gemini LLM are the main signals.
-    base_weights = {
-        "visual": 0.45,
-        "temporal": 0.15,
-        "llm": 0.40
-    }
+def compute_verdict(visual_score, temporal_score, llm_score, agent_status, metadata=None, audio_score=0.0, has_audio=False):
+    # base weights across active forensic modalities
+    if has_audio and agent_status.get("audio") == "success":
+        base_weights = {
+            "visual": 0.35,
+            "temporal": 0.15,
+            "llm": 0.35,
+            "audio": 0.15
+        }
+    else:
+        base_weights = {
+            "visual": 0.45,
+            "temporal": 0.15,
+            "llm": 0.40
+        }
 
     if llm_score > 0.60:
-        base_weights = {
-            "visual": 0.20,
-            "temporal": 0.10,
-            "llm": 0.70
-        }
+        if has_audio and agent_status.get("audio") == "success":
+            base_weights = {
+                "visual": 0.15,
+                "temporal": 0.10,
+                "llm": 0.60,
+                "audio": 0.15
+            }
+        else:
+            base_weights = {
+                "visual": 0.20,
+                "temporal": 0.10,
+                "llm": 0.70
+            }
     elif agent_status.get("visual") == "fallback":
-        base_weights["visual"] = 0.10
-        base_weights["temporal"] = 0.15
-        base_weights["llm"] = 0.75
+        if has_audio and agent_status.get("audio") == "success":
+            base_weights = {
+                "visual": 0.10,
+                "temporal": 0.15,
+                "llm": 0.60,
+                "audio": 0.15
+            }
+        else:
+            base_weights = {
+                "visual": 0.10,
+                "temporal": 0.15,
+                "llm": 0.75
+            }
     
     scores = {
         "visual": visual_score,
         "temporal": temporal_score,
-        "llm": llm_score
+        "llm": llm_score,
+        "audio": audio_score
     }
 
     active_weights = {}
@@ -97,6 +122,12 @@ def build_report(state):
                 "status": agent_status.get("temporal", "unknown"),
                 "flow_anomalies_count": sum(1 for r in state.get("flow_results", []) if r.get("is_anomalous")),
                 "face_inconsistencies_count": sum(1 for r in state.get("face_results", []) if r.get("is_inconsistent"))
+            },
+            "audio_agent": {
+                "score": state.get("audio_score", 0.0),
+                "status": agent_status.get("audio", "unknown"),
+                "has_audio": state.get("has_audio", False),
+                "details": state.get("audio_details", {})
             },
             "llm_agent": {
                 "score": state.get("llm_score", 0.0),

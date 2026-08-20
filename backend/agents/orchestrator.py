@@ -2,6 +2,7 @@ from langgraph.graph import StateGraph, START, END
 from agents.state import VeriFrameState
 import agents.visual_agent as visual_agent
 import agents.temporal_agent as temporal_agent
+import agents.audio_agent as audio_agent
 import agents.llm_agent as llm_agent
 import agents.synthesis_agent as synthesis_agent
 import agents.reflection_agent as reflection_agent
@@ -87,6 +88,49 @@ def temporal_node(state: VeriFrameState) -> dict:
             "temporal_flagged_timestamps": [],
             "flow_results": [],
             "face_results": [],
+            "agent_status": status
+        }
+
+
+def audio_node(state: VeriFrameState) -> dict:
+    """
+    node for running audio analysis: spectral frequency cutoffs + lip-sync correlation.
+    """
+    video_path = state.get("video_path", "")
+    frames = state.get("frames", [])
+    status = dict(state.get("agent_status", {}))
+    job_id = state.get("job_id", "")
+
+    if job_id:
+        event_bus.publish_event(job_id, "Audio Forensics Agent", "Analyzing voice acoustics, spectral cutoffs & lip-sync...")
+
+    try:
+        score, details, has_audio = audio_agent.run_audio_analysis(video_path, frames)
+        status["audio"] = "success" if has_audio else "skipped"
+        
+        summary_msg = details.get("summary", "Audio analysis completed.")
+        if job_id:
+            if has_audio:
+                event_bus.publish_event(job_id, "Audio Forensics Agent", f"Completed. Audio fake score: {score:.2f}. {summary_msg}")
+            else:
+                event_bus.publish_event(job_id, "Audio Forensics Agent", "No audio track present (silent clip).")
+
+        return {
+            "audio_score": score,
+            "audio_details": details,
+            "has_audio": has_audio,
+            "agent_status": status,
+            "stream_events": [{"agent": "Audio Forensics", "message": f"Completed. Score: {score:.2f}" if has_audio else "Silent clip"}]
+        }
+    except Exception as e:
+        logger.error(f"error in audio node: {e}", exc_info=True)
+        status["audio"] = "failed"
+        if job_id:
+            event_bus.publish_event(job_id, "Audio Forensics Agent", f"Failed: {e}")
+        return {
+            "audio_score": 0.0,
+            "audio_details": {},
+            "has_audio": False,
             "agent_status": status
         }
 
@@ -249,6 +293,8 @@ def synthesis_node(state: VeriFrameState) -> dict:
     """
     visual_score = state.get("visual_score", 0.0)
     temporal_score = state.get("temporal_score", 0.0)
+    audio_score = state.get("audio_score", 0.0)
+    has_audio = state.get("has_audio", False)
     llm_score = state.get("llm_score", 0.0)
     status = dict(state.get("agent_status", {}))
     job_id = state.get("job_id", "")
@@ -259,7 +305,8 @@ def synthesis_node(state: VeriFrameState) -> dict:
     try:
         metadata = state.get("metadata", {})
         verdict, confidence, normalized_weights = synthesis_agent.compute_verdict(
-            visual_score, temporal_score, llm_score, status, metadata
+            visual_score, temporal_score, llm_score, status, metadata,
+            audio_score=audio_score, has_audio=has_audio
         )
         status["synthesis"] = "success"
         
@@ -298,20 +345,29 @@ from concurrent.futures import ThreadPoolExecutor
 
 def cv_parallel_node(state: VeriFrameState) -> dict:
     """
-    runs Visual Forensics and Temporal Consistency agents simultaneously in parallel.
+    runs Visual Forensics, Temporal Consistency, and Audio Forensics simultaneously in parallel.
+    audio takes ~0.4s and finishes while visual is running, adding 0s to overall wait.
     """
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    with ThreadPoolExecutor(max_workers=3) as pool:
         future_v = pool.submit(visual_node, state)
         future_t = pool.submit(temporal_node, state)
+        future_a = pool.submit(audio_node, state)
+        
         res_v = future_v.result()
         res_t = future_t.result()
+        res_a = future_a.result()
 
-    merged_status = {**res_v.get("agent_status", {}), **res_t.get("agent_status", {})}
-    merged_events = res_v.get("stream_events", []) + res_t.get("stream_events", [])
+    merged_status = {
+        **res_v.get("agent_status", {}),
+        **res_t.get("agent_status", {}),
+        **res_a.get("agent_status", {})
+    }
+    merged_events = res_v.get("stream_events", []) + res_t.get("stream_events", []) + res_a.get("stream_events", [])
 
     return {
         **res_v,
         **res_t,
+        **res_a,
         "agent_status": merged_status,
         "stream_events": merged_events
     }
@@ -360,11 +416,12 @@ workflow.add_edge("synthesis", END)
 compiled_graph = workflow.compile()
 
 
-def run_pipeline(frames, metadata, job_id=None):
+def run_pipeline(frames, metadata, job_id=None, video_path=""):
     """
     outer wrapper to trigger the compiled langgraph workflow.
     """
     initial_state = {
+        "video_path": video_path or "",
         "frames": frames,
         "metadata": metadata,
         "job_id": job_id or "",

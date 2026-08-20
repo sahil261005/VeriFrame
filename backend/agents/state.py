@@ -49,6 +49,11 @@ class VeriFrameState(TypedDict, total=False):
     flow_results: List[Dict[str, Any]]
     face_results: List[Dict[str, Any]]
 
+    # audio agent output
+    audio_score: float
+    audio_details: Dict[str, Any]
+    has_audio: bool
+
     # routing decisions (set by router node)
     route_decision: str       # "skip_llm", "llm_extended", or "llm_normal"
     llm_frame_count: int      # how many frames to send to LLM (8 or 12)
