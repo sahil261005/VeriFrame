@@ -155,14 +155,27 @@ def analyze_single_frame(frame_data, pipe):
 
 
 def analyze_frames(frames, pipe):
-    # check all frames for deepfakes. uses threads so we dont wait for each API call one by one
+    # check all frames for deepfakes
     if not frames:
         return 0.0, [], []
 
-    # run frames through the model in parallel (each one makes an HTTP call so threading helps a lot)
-    workers = min(len(frames), 6)
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        per_frame_results = list(pool.map(lambda f: analyze_single_frame(f, pipe), frames))
+    # If running local model or already in fallback
+    if pipe != "hf_api":
+        workers = min(len(frames), 6)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            per_frame_results = list(pool.map(lambda f: analyze_single_frame(f, pipe), frames))
+    else:
+        # Fast Anchor Probe: check 1st frame to see if HuggingFace is responsive
+        first_res = analyze_single_frame(frames[0], pipe)
+        
+        # If the 1st frame succeeded with HuggingFace (not fallback)
+        if len(frames) > 1:
+            workers = min(len(frames) - 1, 5)
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                remaining_results = list(pool.map(lambda f: analyze_single_frame(f, pipe), frames[1:]))
+            per_frame_results = [first_res] + remaining_results
+        else:
+            per_frame_results = [first_res]
 
     # Calculate average fake score across all frames
     if len(per_frame_results) > 0:

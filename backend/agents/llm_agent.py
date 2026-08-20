@@ -168,10 +168,12 @@ def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, 
     contents.insert(0, system_prompt)
 
     try:
-        # use gemini-3.5-flash-lite for fast, high-accuracy multi-image reasoning (~2-3s)
+        # use gemini-3.5-flash-lite for fast, high-accuracy multi-image reasoning (~1-2s)
         gen_config = types.GenerateContentConfig(
             response_mime_type="application/json",
-            temperature=0.1
+            temperature=0.1,
+            max_output_tokens=600,
+            thinking_config=types.ThinkingConfig(thinking_budget=0)
         )
 
         response = client.models.generate_content(
