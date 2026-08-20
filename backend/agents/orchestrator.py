@@ -101,6 +101,7 @@ def audio_node(state: VeriFrameState) -> dict:
     status = dict(state.get("agent_status", {}))
     job_id = state.get("job_id", "")
 
+    logger.info(f"Audio Forensics Node started (video_path={video_path})...")
     if job_id:
         event_bus.publish_event(job_id, "Audio Forensics Agent", "Analyzing voice acoustics, spectral cutoffs & lip-sync...")
 
@@ -109,6 +110,7 @@ def audio_node(state: VeriFrameState) -> dict:
         status["audio"] = "success" if has_audio else "skipped"
         
         summary_msg = details.get("summary", "Audio analysis completed.")
+        logger.info(f"Audio Forensics Node result: has_audio={has_audio}, score={score:.2f}")
         if job_id:
             if has_audio:
                 event_bus.publish_event(job_id, "Audio Forensics Agent", f"Completed. Audio fake score: {score:.2f}. {summary_msg}")
