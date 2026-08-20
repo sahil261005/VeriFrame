@@ -61,10 +61,24 @@ app.add_middleware(
 )
 
 
+import threading
+import agents.visual_agent as visual_agent
+
+
+@app.on_event("startup")
+def startup_event():
+    """trigger background model warmup on server boot"""
+    threading.Thread(target=visual_agent.warmup_huggingface_model, daemon=True).start()
+
+
 @app.get("/health")
-def health_check():
-    """lightweight health check endpoint to keep server awake"""
-    return {"status": "ok", "service": "VeriFrame API"}
+def health_check(background_tasks: BackgroundTasks):
+    """
+    health check endpoint hit by your cron job.
+    automatically pings HuggingFace in background to keep the ViT model hot 24/7!
+    """
+    background_tasks.add_task(visual_agent.warmup_huggingface_model)
+    return {"status": "ok", "service": "VeriFrame API", "model_warm": True}
 
 
 @app.post("/auth/register", response_model=schemas.TokenResponse)
