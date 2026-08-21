@@ -203,6 +203,9 @@ def llm_node(state: VeriFrameState) -> dict:
             msg += " (Re-evaluating with self-correction feedback)"
         event_bus.publish_event(job_id, "Cognitive Reasoning Agent", msg)
 
+    audio_details = state.get("audio_details", {})
+    has_audio = state.get("has_audio", False)
+
     try:
         suspicious = llm_agent.pick_suspicious_frames(visual_flagged, temporal_flagged, frames, max_count=max_count)
         
@@ -210,7 +213,8 @@ def llm_node(state: VeriFrameState) -> dict:
             suspicious, 
             reflection_prompt=reflection_feedback, 
             metadata=metadata, 
-            all_frames=frames
+            all_frames=frames,
+            audio_details=audio_details if has_audio else None
         )
         status["llm"] = "success"
 

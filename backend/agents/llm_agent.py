@@ -50,27 +50,36 @@ def pick_suspicious_frames(visual_flagged, temporal_flagged, all_frames, max_cou
 
 def run_tools_for_frame(frame_data, all_frames=None, metadata=None):
     # run our forensic tools on a single frame and collect results
+    # reuses precomputed noise variance to save 5+ seconds of redundant CPU calculations
     tool_results = {}
     tools_called = []
 
-    # 1. noise & edge tool
+    # 1. noise & edge tool (instant: reads precalculated noise_variance from frame)
     try:
-        res = TOOL_REGISTRY["analyze_noise_pattern"]["function"](frame_data)
-        tool_results["noise_pattern"] = res
+        noise_var = frame_data.get("noise_variance")
+        if noise_var is not None:
+            if noise_var < 0.00003:
+                risk = "high (unnaturally smooth noise, characteristic of AI generation)"
+            elif noise_var < 0.00008:
+                risk = "medium (low sensor noise)"
+            else:
+                risk = "low (natural camera sensor noise pattern)"
+
+            tool_results["noise_pattern"] = {
+                "tool": "analyze_noise_pattern",
+                "noise_variance": round(noise_var, 8),
+                "noise_risk": risk,
+                "summary": f"Normalized noise variance: {noise_var:.7f} ({risk})."
+            }
+        else:
+            res = TOOL_REGISTRY["analyze_noise_pattern"]["function"](frame_data)
+            tool_results["noise_pattern"] = res
         tools_called.append("analyze_noise_pattern")
     except Exception as e:
         logger.warning(f"tool analyze_noise_pattern failed: {e}")
 
-    # 2. face landmarks tool
-    try:
-        res = TOOL_REGISTRY["check_face_landmarks"]["function"](frame_data)
-        tool_results["face_landmarks"] = res
-        tools_called.append("check_face_landmarks")
-    except Exception as e:
-        logger.warning(f"tool check_face_landmarks failed: {e}")
-
-    # 3. optical flow comparison tool (if all_frames provided)
-    if all_frames:
+    # 2. optical flow comparison tool (if all_frames provided)
+    if all_frames and len(all_frames) > 1:
         try:
             res = TOOL_REGISTRY["compare_adjacent_frames"]["function"](frame_data, all_frames)
             tool_results["adjacent_frames"] = res
@@ -78,7 +87,7 @@ def run_tools_for_frame(frame_data, all_frames=None, metadata=None):
         except Exception as e:
             logger.warning(f"tool compare_adjacent_frames failed: {e}")
 
-    # 4. metadata check tool (if metadata provided)
+    # 3. metadata check tool (if metadata provided)
     if metadata and "metadata" not in tool_results:
         try:
             res = TOOL_REGISTRY["check_metadata"]["function"](metadata)
@@ -90,7 +99,7 @@ def run_tools_for_frame(frame_data, all_frames=None, metadata=None):
     return tool_results, tools_called
 
 
-def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, all_frames=None, api_key=None):
+def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, all_frames=None, api_key=None, audio_details=None):
     # sends frames to Gemini 3.5 Flash-Lite for multi-image analysis and gets back a JSON verdict
     from google import genai
     from google.genai import types
@@ -128,6 +137,16 @@ def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, 
 
         contents.append(f"=== Frame #{idx + 1} at timestamp {ts}s ===")
         contents.append(pil_img)
+
+    # Append acoustic analysis findings if audio track was present
+    if audio_details and audio_details.get("has_audio"):
+        audio_text = (
+            f"AUDIO / ACOUSTIC FORENSIC FINDINGS:\n"
+            f"- Spectral Cutoff Check: {audio_details.get('spectral_summary', 'N/A')}\n"
+            f"- Voice Cadence / Volume Dynamic: {audio_details.get('cadence_summary', 'N/A')}\n"
+            f"- Lip-Sync Correlation: {audio_details.get('lipsync_summary', 'N/A')}"
+        )
+        tool_summaries.append(audio_text)
 
     system_prompt = (
         "You are an expert video forensics analyst operating in a ReAct multi-agent framework.\n"
@@ -295,7 +314,7 @@ def analyze_with_groq(suspicious_frames, reflection_prompt="", metadata=None, al
     return llm_reasoning, frame_explanations, round(llm_score, 4), tools_used_list
 
 
-def analyze_with_llm(suspicious_frames, reflection_prompt="", metadata=None, all_frames=None):
+def analyze_with_llm(suspicious_frames, reflection_prompt="", metadata=None, all_frames=None, audio_details=None):
     # main entry point: tries Gemini first, falls back to Groq
     if not suspicious_frames:
         return "No suspicious frames flagged for analysis", {}, 0.0, []
@@ -310,7 +329,8 @@ def analyze_with_llm(suspicious_frames, reflection_prompt="", metadata=None, all
                 reflection_prompt=reflection_prompt,
                 metadata=metadata,
                 all_frames=all_frames,
-                api_key=gemini_key
+                api_key=gemini_key,
+                audio_details=audio_details
             )
             if res:
                 return res
