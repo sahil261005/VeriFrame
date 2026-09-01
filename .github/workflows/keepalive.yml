@@ -1,0 +1,27 @@
+name: 24/7 VeriFrame Keep-Alive Ping
+
+on:
+  schedule:
+    # Runs every 5 minutes, 24/7 forever (Bulletproof: guarantees Render never reaches 15min idle)
+    - cron: '*/5 * * * *'
+  workflow_dispatch: # Allows manual trigger from GitHub Actions tab
+
+jobs:
+  ping-health:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping VeriFrame Backend Health Endpoint
+        run: |
+          echo "Sending keep-alive ping to VeriFrame backend..."
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+            -H "Accept: application/json" \
+            --max-time 15 \
+            "https://veriframe-tmvi.onrender.com/health")
+          echo "Response Status Code: $HTTP_STATUS"
+          if [ "$HTTP_STATUS" -eq 200 ]; then
+            echo "✅ VeriFrame backend and HuggingFace ViT model are warm & alive!"
+          else
+            echo "⚠️ Ping received status $HTTP_STATUS, retrying once..."
+            curl -s -I "https://veriframe-tmvi.onrender.com/health" || true
+          fi
