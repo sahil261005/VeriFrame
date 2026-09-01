@@ -16,12 +16,12 @@ jobs:
           HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
             -H "Accept: application/json" \
-            --max-time 15 \
+            --max-time 120 \
             "https://veriframe-tmvi.onrender.com/health")
           echo "Response Status Code: $HTTP_STATUS"
           if [ "$HTTP_STATUS" -eq 200 ]; then
-            echo "✅ VeriFrame backend and HuggingFace ViT model are warm & alive!"
+            echo "✅ VeriFrame backend is warm & alive!"
           else
             echo "⚠️ Ping received status $HTTP_STATUS, retrying once..."
-            curl -s -I "https://veriframe-tmvi.onrender.com/health" || true
+            curl -s -o /dev/null -w "%{http_code}" --max-time 120 "https://veriframe-tmvi.onrender.com/health" || true
           fi
