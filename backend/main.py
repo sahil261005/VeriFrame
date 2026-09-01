@@ -67,18 +67,18 @@ import agents.visual_agent as visual_agent
 
 @app.on_event("startup")
 def startup_event():
-    """trigger background model warmup on server boot"""
-    threading.Thread(target=visual_agent.warmup_huggingface_model, daemon=True).start()
+    """pre-load the ONNX deepfake detection model into memory on server boot"""
+    threading.Thread(target=visual_agent.load_model, daemon=True).start()
 
 
 @app.get("/health")
-def health_check(background_tasks: BackgroundTasks):
+def health_check():
     """
-    health check endpoint hit by your cron job.
-    automatically pings HuggingFace in background to keep the ViT model hot 24/7!
+    health check endpoint hit by GitHub Actions keep-alive ping.
+    confirms the server is running and the ONNX model is loaded.
     """
-    background_tasks.add_task(visual_agent.warmup_huggingface_model)
-    return {"status": "ok", "service": "VeriFrame API", "model_warm": True}
+    model_loaded = visual_agent._onnx_session is not None
+    return {"status": "ok", "service": "VeriFrame API", "model_loaded": model_loaded}
 
 
 @app.post("/auth/register", response_model=schemas.TokenResponse)

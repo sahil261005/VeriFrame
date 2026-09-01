@@ -1,0 +1,12 @@
+{
+  "id2label": {
+    "0": "Real",
+    "1": "Fake"
+  },
+  "label2id": {
+    "Fake": 1,
+    "Real": 0
+  },
+  "model_type": "vit",
+  "image_size": 224
+}

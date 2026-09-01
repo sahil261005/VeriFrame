@@ -1,6 +1,5 @@
 import os
-import io
-import requests
+import numpy as np
 from PIL import Image
 import cv2
 import logging
@@ -8,90 +7,99 @@ from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
 
-# HuggingFace model API endpoints
-HF_MODEL_ID = "dima806/deepfake_vs_real_image_detection"
-HF_ROUTER_URL = f"https://router.huggingface.co/hf-inference/models/{HF_MODEL_ID}"
-HF_LEGACY_URL = f"https://api-inference.huggingface.co/models/{HF_MODEL_ID}"
+# path to the quantized ONNX deepfake detection model (83 MB, INT8)
+MODEL_DIR = os.path.join(os.path.dirname(__file__), "..", "model_onnx")
+ONNX_MODEL_PATH = os.path.join(MODEL_DIR, "model_quantized.onnx")
+
+# global ONNX session (loaded once, reused for all requests)
+_onnx_session = None
 
 
 def load_model():
     """
-    tries to load local transformers model.
-    if transformers is missing or on cloud server (Render), uses 'hf_api'.
+    loads the quantized ONNX deepfake detection model into memory.
+    this runs the same ViT neural network that was on HuggingFace,
+    but now runs directly on the server with zero external API calls.
     """
+    global _onnx_session
+
+    # if already loaded, return the cached session
+    if _onnx_session is not None:
+        return _onnx_session
+
     try:
-        from transformers import pipeline
-        return pipeline("image-classification", model=HF_MODEL_ID)
-    except Exception:
-        # On Render or CPU servers, use HuggingFace free API over HTTP
-        return "hf_api"
+        import onnxruntime as ort
 
-
-# persistent session for connection pooling & TLS keep-alive
-_http_session = requests.Session()
-
-
-def warmup_huggingface_model():
-    """
-    sends a tiny 1x1 pixel ping to HuggingFace to keep the deep learning model hot in VRAM.
-    """
-    hf_token = os.environ.get("HF_TOKEN")
-    headers = {"Content-Type": "image/jpeg", "x-wait-for-model": "true"}
-    if hf_token:
-        headers["Authorization"] = f"Bearer {hf_token}"
-    
-    # 1x1 blank white JPEG
-    tiny_jpeg = b'\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00`\x00`\x00\x00\xff\xdb\x00C\x00\x08\x06\x06\x07\x06\x05\x08\x07\x07\x07\t\t\x08\n\x0c\x14\r\x0c\x0b\x0b\x0c\x19\x12\x13\x0f\x14\x1d\x1a\x1f\x1e\x1d\x1a\x1c\x1c $.\' ",#\x1c\x1c(7),01444\x1f\'9=82<.342\xff\xc0\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11\x00\xff\xc4\x00\x1f\x00\x00\x01\x05\x01\x01\x01\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\xff\xda\x00\x08\x01\x01\x00\x00?\x00\xbf\x00\xff\xd9'
-    try:
-        resp = _http_session.post(HF_ROUTER_URL, headers=headers, data=tiny_jpeg, timeout=5)
-        if resp.status_code == 200:
-            logger.info("HuggingFace model warmup ping successful (model is hot in VRAM).")
-            return True
+        if os.path.exists(ONNX_MODEL_PATH):
+            _onnx_session = ort.InferenceSession(ONNX_MODEL_PATH)
+            logger.info(f"ONNX deepfake model loaded successfully ({os.path.getsize(ONNX_MODEL_PATH) / (1024*1024):.1f} MB)")
+            return _onnx_session
+        else:
+            logger.warning(f"ONNX model file not found at {ONNX_MODEL_PATH}, using heuristic fallback")
+            return "heuristic_fallback"
     except Exception as e:
-        logger.warning(f"HuggingFace warmup ping notice: {e}")
-    return False
+        logger.warning(f"Failed to load ONNX model: {e}, using heuristic fallback")
+        return "heuristic_fallback"
 
 
-def query_huggingface_api(img_array):
-    # sends a frame to HuggingFace cloud API and returns the fake score
-    hf_token = os.environ.get("HF_TOKEN")
-
-    # convert OpenCV BGR frame to RGB and PIL Image
+def preprocess_frame(img_array):
+    """
+    prepares an OpenCV BGR frame for the ViT model.
+    resizes to 224x224, converts to RGB, normalizes pixel values.
+    """
+    # convert BGR to RGB
     rgb = cv2.cvtColor(img_array, cv2.COLOR_BGR2RGB)
     pil_img = Image.fromarray(rgb)
 
-    buffer = io.BytesIO()
-    pil_img.save(buffer, format="JPEG", quality=85)
-    image_bytes = buffer.getvalue()
+    # resize to 224x224 (what the ViT model expects)
+    pil_img = pil_img.resize((224, 224), Image.BILINEAR)
 
-    # Query modern HuggingFace router endpoint with explicit Content-Type
-    headers = {
-        "Content-Type": "image/jpeg",
-        "x-wait-for-model": "true"
-    }
-    if hf_token:
-        headers["Authorization"] = f"Bearer {hf_token}"
+    # convert to numpy array and normalize to [0, 1]
+    img_np = np.array(pil_img).astype(np.float32) / 255.0
 
+    # apply ImageNet normalization (mean and std from training data)
+    mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+    std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+    img_np = (img_np - mean) / std
+
+    # convert from HWC (height, width, channels) to CHW (channels, height, width)
+    img_np = np.transpose(img_np, (2, 0, 1))
+
+    # add batch dimension: (1, 3, 224, 224)
+    return np.expand_dims(img_np, axis=0)
+
+
+def run_onnx_inference(img_array, session):
+    """
+    runs the ONNX ViT deepfake classifier on a single frame.
+    returns the fake probability score (0.0 = real, 1.0 = fake).
+    """
     try:
-        response = _http_session.post(HF_ROUTER_URL, headers=headers, data=image_bytes, timeout=8)
-        if response.status_code == 200:
-            predictions = response.json()
-            logger.info(f"HuggingFace API response: {predictions}")
-            if isinstance(predictions, list):
-                for pred in predictions:
-                    if isinstance(pred, dict) and "fake" in pred.get("label", "").lower():
-                        return float(pred.get("score", 0.0))
-        else:
-            logger.warning(f"HuggingFace HTTP {response.status_code}: {response.text}")
-    except Exception as http_err:
-        logger.warning(f"HuggingFace HTTP request to {HF_ROUTER_URL} failed: {http_err}")
+        # preprocess the frame for the ViT model
+        input_tensor = preprocess_frame(img_array)
 
-    return None
+        # run inference
+        input_name = session.get_inputs()[0].name
+        output = session.run(None, {input_name: input_tensor})
+        logits = output[0][0]  # shape: (2,) -> [real_logit, fake_logit]
+
+        # softmax to convert logits to probabilities
+        exp_logits = np.exp(logits - np.max(logits))  # numerically stable softmax
+        probs = exp_logits / exp_logits.sum()
+
+        # index 1 = "Fake" probability
+        fake_score = float(probs[1])
+        return fake_score
+
+    except Exception as e:
+        logger.warning(f"ONNX inference failed: {e}")
+        return None
 
 
 def calculate_heuristic_score(img_array, noise_var):
     """
-    fallback function: calculates fake score using simple image noise and edge sharpness
+    fallback function: calculates fake score using simple image noise and edge sharpness.
+    used only when the ONNX model is unavailable.
     """
     gray = cv2.cvtColor(img_array, cv2.COLOR_BGR2GRAY)
     laplacian_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
@@ -112,35 +120,19 @@ def calculate_heuristic_score(img_array, noise_var):
     return min(max(base_score, 0.05), 0.95)
 
 
-
-
-
 def analyze_single_frame(frame_data, pipe):
-    # runs deepfake check on one frame. used by the thread pool below
+    """runs deepfake detection on one video frame."""
     img_array = frame_data["image"]
     timestamp = frame_data["timestamp"]
     noise_var = frame_data.get("noise_variance", 0)
 
     fake_score = None
 
-    # Step 1: Try HuggingFace Cloud API first (for Render server)
-    if pipe == "hf_api":
-        fake_score = query_huggingface_api(img_array)
+    # Step 1: Try ONNX ViT deep learning model (runs on server CPU in ~0.1s)
+    if pipe != "heuristic_fallback":
+        fake_score = run_onnx_inference(img_array, pipe)
 
-    # Step 2: Try local PyTorch model if installed
-    elif not isinstance(pipe, str):
-        try:
-            rgb = cv2.cvtColor(img_array, cv2.COLOR_BGR2RGB)
-            pil_img = Image.fromarray(rgb)
-            predictions = pipe(pil_img)
-            for pred in predictions:
-                if "fake" in pred["label"].lower():
-                    fake_score = float(pred["score"])
-                    break
-        except Exception:
-            fake_score = None
-
-    # Step 3: Fallback to noise heuristics if API or local model failed
+    # Step 2: Fallback to noise heuristics if ONNX model unavailable or failed
     if fake_score is None:
         fake_score = calculate_heuristic_score(img_array, noise_var)
 
@@ -155,36 +147,22 @@ def analyze_single_frame(frame_data, pipe):
 
 
 def analyze_frames(frames, pipe):
-    # check all frames for deepfakes
+    """checks all extracted video frames for deepfakes in parallel."""
     if not frames:
         return 0.0, [], []
 
-    # If running local model or already in fallback
-    if pipe != "hf_api":
-        workers = min(len(frames), 6)
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            per_frame_results = list(pool.map(lambda f: analyze_single_frame(f, pipe), frames))
-    else:
-        # Fast Anchor Probe: check 1st frame to see if HuggingFace is responsive
-        first_res = analyze_single_frame(frames[0], pipe)
-        
-        # If the 1st frame succeeded with HuggingFace (not fallback)
-        if len(frames) > 1:
-            workers = min(len(frames) - 1, 5)
-            with ThreadPoolExecutor(max_workers=workers) as pool:
-                remaining_results = list(pool.map(lambda f: analyze_single_frame(f, pipe), frames[1:]))
-            per_frame_results = [first_res] + remaining_results
-        else:
-            per_frame_results = [first_res]
+    workers = min(len(frames), 6)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        per_frame_results = list(pool.map(lambda f: analyze_single_frame(f, pipe), frames))
 
-    # Calculate average fake score across all frames
+    # calculate average fake score across all frames
     if len(per_frame_results) > 0:
         total_score = sum(f["fake_confidence"] for f in per_frame_results)
         visual_score = total_score / len(per_frame_results)
     else:
         visual_score = 0.0
 
-    # Get top 5 most suspicious frames
+    # get top 5 most suspicious frames
     sorted_frames = sorted(per_frame_results, key=lambda x: x["fake_confidence"], reverse=True)
     flagged = sorted_frames[:5]
 

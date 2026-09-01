@@ -26,9 +26,9 @@ def visual_node(state: VeriFrameState) -> dict:
     try:
         pipe = visual_agent.load_model()
         score, flagged, all_results = visual_agent.analyze_frames(frames, pipe)
-        status["visual"] = "success" if pipe != "fallback" else "fallback"
+        status["visual"] = "success" if pipe != "heuristic_fallback" else "fallback"
         
-        mode_desc = "deep learning model" if pipe != "fallback" else "high-frequency spatial noise heuristics"
+        mode_desc = "ONNX ViT deep learning model" if pipe != "heuristic_fallback" else "spatial noise heuristics"
         if job_id:
             event_bus.publish_event(job_id, "Visual Forensics Agent", f"Completed using {mode_desc}. Fake score: {score:.2f}")
 
