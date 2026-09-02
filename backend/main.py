@@ -72,10 +72,12 @@ def startup_event():
 
 
 @app.get("/health")
+@limiter.exempt
 def health_check():
     """
     health check endpoint hit by GitHub Actions keep-alive ping.
     confirms the server is running and the ONNX model is loaded.
+    exempt from rate limiting so keep-alive pings are never blocked.
     """
     model_loaded = visual_agent._onnx_session is not None
     return {"status": "ok", "service": "VeriFrame API", "model_loaded": model_loaded}

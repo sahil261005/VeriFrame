@@ -27,7 +27,7 @@ jobs:
           # --------------------------------------------------------
 
           DURATION=20700          # 5 hours 45 minutes in seconds
-          INTERVAL=300            # 5 minutes in seconds
+          INTERVAL=600            # 10 minutes in seconds (well under Render's 15-min idle limit)
           URL="https://veriframe-tmvi.onrender.com/health"
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
