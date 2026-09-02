@@ -2,26 +2,75 @@ name: 24/7 VeriFrame Keep-Alive Ping
 
 on:
   schedule:
-    # Runs every 5 minutes, 24/7 forever (Bulletproof: guarantees Render never reaches 15min idle)
-    - cron: '*/5 * * * *'
-  workflow_dispatch: # Allows manual trigger from GitHub Actions tab
+    # fires every 5 hours as a safety net to restart the loop.
+    # GitHub cron is unreliable (can delay 2-4 hrs), but that's fine
+    # because the RUNNING job already pings every 5 min continuously.
+    - cron: '0 */5 * * *'
+  workflow_dispatch:
+
+# only allow one instance at a time so we don't stack runners
+concurrency:
+  group: keepalive
+  cancel-in-progress: false
 
 jobs:
-  ping-health:
+  keep-alive-loop:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping VeriFrame Backend Health Endpoint
+      - name: Continuous keep-alive ping (loops for ~5 h 45 min)
         run: |
-          echo "Sending keep-alive ping to VeriFrame backend..."
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-            -H "Accept: application/json" \
-            --max-time 120 \
-            "https://veriframe-tmvi.onrender.com/health")
-          echo "Response Status Code: $HTTP_STATUS"
-          if [ "$HTTP_STATUS" -eq 200 ]; then
-            echo "✅ VeriFrame backend is warm & alive!"
-          else
-            echo "⚠️ Ping received status $HTTP_STATUS, retrying once..."
-            curl -s -o /dev/null -w "%{http_code}" --max-time 120 "https://veriframe-tmvi.onrender.com/health" || true
-          fi
+          # --------------------------------------------------------
+          # This job pings the Render health endpoint every 5 minutes
+          # in a tight loop for ~5 hours 45 minutes. The cron restarts
+          # the job every 5 hours, so there is always overlap and
+          # the server NEVER hits Render's 15-minute idle timeout.
+          # --------------------------------------------------------
+
+          DURATION=20700          # 5 hours 45 minutes in seconds
+          INTERVAL=300            # 5 minutes in seconds
+          URL="https://veriframe-tmvi.onrender.com/health"
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+          END_TIME=$((SECONDS + DURATION))
+          PING_NUM=0
+
+          echo "=== VeriFrame Keep-Alive Loop Started ==="
+          echo "Will run for $((DURATION / 3600))h $((DURATION % 3600 / 60))m"
+          echo "Ping interval: $((INTERVAL / 60)) minutes"
+          echo ""
+
+          while [ $SECONDS -lt $END_TIME ]; do
+            PING_NUM=$((PING_NUM + 1))
+            TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
+
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              --max-time 120 \
+              -H "User-Agent: $UA" \
+              -H "Accept: application/json" \
+              "$URL" 2>/dev/null || echo "000")
+
+            if [ "$HTTP_STATUS" = "200" ]; then
+              echo "[$TIMESTAMP] Ping #$PING_NUM - 200 OK"
+            else
+              echo "[$TIMESTAMP] Ping #$PING_NUM - got $HTTP_STATUS, retrying..."
+              sleep 10
+              RETRY_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+                --max-time 120 \
+                -H "User-Agent: $UA" \
+                -H "Accept: application/json" \
+                "$URL" 2>/dev/null || echo "000")
+              echo "[$TIMESTAMP] Ping #$PING_NUM retry - $RETRY_STATUS"
+            fi
+
+            # sleep until next ping (unless loop time is up)
+            REMAINING=$((END_TIME - SECONDS))
+            if [ $REMAINING -gt $INTERVAL ]; then
+              sleep $INTERVAL
+            else
+              sleep $REMAINING 2>/dev/null || true
+            fi
+          done
+
+          echo ""
+          echo "=== Loop finished after $PING_NUM pings ==="
+          echo "Cron will restart this job shortly."
