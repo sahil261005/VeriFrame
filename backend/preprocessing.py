@@ -239,12 +239,14 @@ def validate_video(file_path):
     if meta["duration"] > 30.0:
         raise ValueError(f"video duration is {meta['duration']}s, which exceeds the 30-second limit")
 
-    # decoding very high resolution video needs hundreds of MB, which a 512MB host cannot spare.
-    # the cap is on total pixels (~720p) so portrait and odd-shaped screen recordings are not rejected
+    # big videos are accepted and shrunk to 480p before analysis (see downscale_for_analysis), because decoding
+    # full-size frames all at once needs hundreds of MB. the hard ceiling only stops absurd inputs (8K and up).
+    max_input_pixels = int(os.environ.get("MAX_INPUT_PIXELS", "9000000"))
     max_pixels = int(os.environ.get("MAX_VIDEO_PIXELS", "1000000"))
     w, h = meta.get("width", 0) or 0, meta.get("height", 0) or 0
-    if w * h > max_pixels:
-        raise ValueError(f"video resolution is too high ({w}x{h}); please upload 720p or lower")
+    if w * h > max_input_pixels:
+        raise ValueError(f"video resolution is too high ({w}x{h}); please upload 4K or lower")
+    meta["needs_downscale"] = w * h > max_pixels
 
     return meta
 
@@ -255,7 +257,7 @@ def downscale_video(file_path, output_path, target_height=480):
     if not cap.isOpened():
         raise ValueError("could not open video to downscale")
         
-    fps = cap.get(cv2.CAP_PROP_FPS)
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     
@@ -283,12 +285,29 @@ def downscale_video(file_path, output_path, target_height=480):
         ret, frame = cap.read()
         if not ret:
             break
-        resized = cv2.resize(frame, (new_width, new_height))
+        resized = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
         out.write(resized)
         
     cap.release()
     out.release()
     return output_path
+
+
+# shrinks a large upload to 480p for the visual/temporal/LLM agents. video only: audio forensics still reads the
+# original file. uses ffmpeg when installed (fast, low memory) and otherwise the frame-by-frame opencv path above,
+# which holds a single frame in memory at a time.
+def downscale_for_analysis(file_path, output_path, target_height=480, timeout=180):
+    if shutil.which("ffmpeg"):
+        cmd = ["ffmpeg", "-y", "-i", file_path, "-an", "-vf", f"scale=-2:{target_height}",
+               "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26", "-threads", "2", output_path]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            if result.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                return output_path
+            logger.warning("ffmpeg downscale failed, falling back to opencv: %s", result.stderr[-300:])
+        except Exception as e:
+            logger.warning("ffmpeg downscale errored, falling back to opencv: %s", e)
+    return downscale_video(file_path, output_path, target_height=target_height)
 
 # number of consecutive frames captured after each keyframe for the temporal agent,
 # and the width they are stored at (small, to keep memory low)

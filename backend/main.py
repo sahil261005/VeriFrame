@@ -196,7 +196,14 @@ def _process_video(job_id: str, temp_path: str, meta: dict):
         
         # 1. grab sample keyframes from the video and resize them in memory
         job_start = time.perf_counter()
-        frames = preprocessing.extract_frames(temp_path, interval=1.0, target_height=480, max_frames=6)
+        frame_source = temp_path
+        if meta.get("needs_downscale"):
+            # oversized upload: shrink to 480p first so full-size frames are never held in memory.
+            # the original stays on disk for audio forensics.
+            small_path = temp_path + ".small.mp4"
+            frame_source = preprocessing.downscale_for_analysis(temp_path, small_path)
+            logger.info(f"downscaled {meta.get('width')}x{meta.get('height')} upload for job {job_id}.")
+        frames = preprocessing.extract_frames(frame_source, interval=1.0, target_height=480, max_frames=6)
         extract_seconds = round(time.perf_counter() - job_start, 3)
         logger.info(f"extracted {len(frames)} keyframes for job {job_id}.")
         
@@ -275,12 +282,13 @@ def _process_video(job_id: str, temp_path: str, meta: dict):
             
     finally:
         db.close()
-        # clean up the uploaded temp file
-        if os.path.exists(temp_path):
-            try:
-                os.remove(temp_path)
-            except Exception as e:
-                logger.error(f"error removing temp video {temp_path}: {e}")
+        # clean up the uploaded temp file and its downscaled copy
+        for path in (temp_path, temp_path + ".small.mp4"):
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception as e:
+                    logger.error(f"error removing temp video {path}: {e}")
 
 
 @app.post("/upload", response_model=schemas.JobStatusResponse)
