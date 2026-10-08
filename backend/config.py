@@ -21,3 +21,28 @@ if not os.path.exists(UPLOAD_DIR):
 # CORS origins for security control (handles both plural 'CORS_ORIGINS' and singular 'CORS_ORIGIN' env variables)
 raw_origins = os.environ.get("CORS_ORIGINS") or os.environ.get("CORS_ORIGIN") or "http://localhost:5173"
 CORS_ORIGINS = [origin.strip().rstrip("/") for origin in raw_origins.split(",")]
+
+
+def _allowed_cpus():
+    # containers (Render, Docker) can see every core of the host but may only get a fraction of one;
+    # the real limit is the cgroup CPU quota. falls back to the visible core count when there is no quota.
+    try:
+        with open("/sys/fs/cgroup/cpu.max") as f:  # cgroup v2: "<quota> <period>" or "max <period>"
+            quota, period = f.read().split()[:2]
+            if quota != "max":
+                return int(quota) / int(period)
+    except (OSError, ValueError):
+        pass
+    try:
+        with open("/sys/fs/cgroup/cpu/cpu.cfs_quota_us") as fq, open("/sys/fs/cgroup/cpu/cpu.cfs_period_us") as fp:
+            quota, period = int(fq.read()), int(fp.read())  # cgroup v1: quota -1 means unlimited
+            if quota > 0:
+                return quota / period
+    except (OSError, ValueError):
+        pass
+    return os.cpu_count() or 1
+
+
+# threads for ONNX Runtime / OpenCV / BLAS. without a cap each library starts one thread per *visible* core, and on a
+# host limited to a fraction of a CPU those threads mostly fight each other (CV stage measured ~100x slower on Render).
+CPU_THREADS = int(os.environ.get("ANALYSIS_THREADS") or max(1, min(os.cpu_count() or 1, int(_allowed_cpus()))))

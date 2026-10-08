@@ -6,6 +6,7 @@ import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 import agents.remote_detector as remote_detector
+import config
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,9 @@ def _load_model_locked():
             # prepacking duplicates the weights in memory (+~150MB, no speed gain here); matters on a 512MB host
             opts = ort.SessionOptions()
             opts.add_session_config_entry("session.disable_prepacking", "1")
+            # frames already run in parallel (analyze_video), so each run gets its share of the allowed CPUs
+            opts.intra_op_num_threads = max(1, config.CPU_THREADS // min(6, config.CPU_THREADS))
+            opts.inter_op_num_threads = 1
             _onnx_session = ort.InferenceSession(ONNX_MODEL_PATH, opts)
             logger.info(f"ONNX deepfake model loaded successfully ({os.path.getsize(ONNX_MODEL_PATH) / (1024*1024):.1f} MB)")
             return _onnx_session
@@ -271,7 +275,7 @@ def analyze_frames(frames, pipe):
     if isinstance(pipe, _RemoteFaceswap):
         per_frame_results = _analyze_remote(frames)
     else:
-        workers = min(len(frames), 6)
+        workers = min(len(frames), 6, config.CPU_THREADS)
         with ThreadPoolExecutor(max_workers=workers) as pool:
             per_frame_results = list(pool.map(lambda f: analyze_single_frame(f, pipe), frames))
 

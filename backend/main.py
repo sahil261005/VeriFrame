@@ -10,6 +10,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import config
+
+# must be set before numpy / OpenCV / onnxruntime are imported (see config.CPU_THREADS)
+for _var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+    os.environ.setdefault(_var, str(config.CPU_THREADS))
+
 # LangSmith tracing is disabled for good: LangGraph would otherwise copy and upload every node's state
 # (including all decoded video frames) on each step, which tripled memory use and sends user videos to a third party
 for _var in ("LANGCHAIN_TRACING_V2", "LANGCHAIN_TRACING", "LANGSMITH_TRACING"):

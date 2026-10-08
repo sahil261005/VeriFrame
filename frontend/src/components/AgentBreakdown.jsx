@@ -6,6 +6,8 @@ function AgentBreakdown({ breakdown, isPartial }) {
   const audio = breakdown?.audio_agent || {};
   const llm = breakdown?.llm_agent || {};
   const provenance = breakdown?.provenance_agent || {};
+  // backend skips the face-swap model when signed C2PA credentials already prove AI generation
+  const visualSkippedForC2pa = visual.status === 'skipped' && provenance.c2pa_ai_generated && provenance.c2pa_signature_valid;
 
   // llm_agent.reasoning starts with "<provider> ...analyzed N frames (Tools: ...)", then Gemini's summary after "): "
   const llmReasoning = llm.reasoning || '';
@@ -59,12 +61,14 @@ function AgentBreakdown({ breakdown, isPartial }) {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
             <span style={{ fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase', color: 'var(--primary)' }}>[ Visual ]</span>
             <span className={`badge ${visual.status === 'success' ? 'badge-authentic' : visual.status === 'fallback' || visual.status === 'skipped' ? 'badge-uncertain' : 'badge-manipulated'}`} style={{ border: 'none' }}>
-              {visual.status === 'fallback' ? 'heuristics' : visual.status === 'skipped' ? 'No Face' : visual.status}
+              {visual.status === 'fallback' ? 'heuristics' : visual.status === 'skipped' ? (visualSkippedForC2pa ? 'Not Needed' : 'No Face') : visual.status}
             </span>
           </div>
           <h4 style={{ fontSize: '16px', fontWeight: '700', marginBottom: '6px' }}>Visual Forensics</h4>
           <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
-            Face-swap detector (ViT) on frames that contain a face. It is not built to spot fully AI-generated video.
+            {visualSkippedForC2pa
+              ? 'Skipped to save time: the signed C2PA credentials already prove this video is AI-generated.'
+              : 'Face-swap detector (ViT) on frames that contain a face. It is not built to spot fully AI-generated video.'}
           </p>
           <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '12px', display: 'flex', justifyContent: 'space-between', fontSize: '14px' }}>
             <span style={{ color: 'var(--text-secondary)' }}>Fake Rating</span>

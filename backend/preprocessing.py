@@ -7,6 +7,10 @@ import logging
 import numpy as np
 import cv2
 
+import config
+
+cv2.setNumThreads(config.CPU_THREADS)  # OpenCV's own pool also defaults to every visible core
+
 logger = logging.getLogger(__name__)
 
 

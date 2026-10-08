@@ -34,6 +34,15 @@ def visual_node(state: VeriFrameState) -> dict:
     if job_id:
         event_bus.publish_event(job_id, "Visual Forensics Agent", "Inspecting high-frequency noise variance and spatial artifacts...")
 
+    # a validly signed C2PA "AI-generated" declaration already fixes the verdict at >= 0.95 (synthesis), so the
+    # face-swap ViT (the slowest CPU step, ~20 s on a fractional-CPU host) cannot change the outcome; skip it
+    provenance = state.get("metadata", {}).get("provenance", {})
+    if provenance.get("c2pa_ai_generated") and provenance.get("c2pa_signature_valid"):
+        status["visual"] = "skipped"
+        if job_id:
+            event_bus.publish_event(job_id, "Visual Forensics Agent", "Skipped: signed C2PA credentials already declare the video AI-generated.")
+        return {"visual_score": 0.0, "visual_flagged_frames": [], "visual_per_frame": [], "agent_status": status}
+
     try:
         pipe = visual_agent.load_model()
         score, flagged, all_results = visual_agent.analyze_frames(frames, pipe)
