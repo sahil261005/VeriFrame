@@ -73,9 +73,10 @@ class VeriFrameState(TypedDict, total=False):
 
     # routing decisions (set by router node)
     route_decision: str       # "skip_llm", "llm_extended", or "llm_normal"
-    llm_frame_count: int      # how many frames to send to LLM (8 or 12)
+    llm_frame_count: int      # how many frames to send to LLM (3 or 4)
 
     # llm agent output
+    llm_frame_timestamps: List[float]  # the frames the LLM actually looked at (shown in the UI gallery)
     llm_reasoning: str
     frame_explanations: Dict[str, str]
     llm_score: float

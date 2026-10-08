@@ -183,13 +183,19 @@ def _process_video(job_id: str, temp_path: str, meta: dict):
             event_bus.mark_failed(job_id)
             return
 
-        # 5. extract and build thumbnails for flagged suspicious frames
-        suspicious_frames = []
-        visual_flagged = pipeline_output.get("visual_flagged_frames", [])
-        temporal_flagged = pipeline_output.get("temporal_flagged_timestamps", [])
-        
-        from agents.llm_agent import pick_suspicious_frames
-        flagged_frames = pick_suspicious_frames(visual_flagged, temporal_flagged, frames)
+        # 5. thumbnails of the frames the LLM actually analysed, so every thumbnail has a real explanation
+        llm_ts = set(pipeline_output.get("llm_frame_timestamps") or [])
+        if llm_ts:
+            flagged_frames = [f for f in frames if round(f["timestamp"], 3) in llm_ts]
+        else:
+            # LLM skipped or failed: show the same frames it would have been given
+            from agents.llm_agent import pick_suspicious_frames
+            flagged_frames = pick_suspicious_frames(
+                pipeline_output.get("visual_flagged_frames", []),
+                pipeline_output.get("temporal_flagged_timestamps", []),
+                frames,
+                max_count=pipeline_output.get("llm_frame_count", 4),
+            )
         
         thumbnails_list = []
         for f in flagged_frames:

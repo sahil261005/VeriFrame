@@ -1,3 +1,12 @@
+import os
+
+# LangSmith tracing stays off however this module is imported (server, benchmark or a one-off script): it copies
+# every node's state, including decoded video frames, and uploads it. main.py and evaluate_pipeline.py do the same.
+for _var in ("LANGCHAIN_TRACING_V2", "LANGCHAIN_TRACING", "LANGSMITH_TRACING"):
+    os.environ[_var] = "false"
+for _var in ("LANGCHAIN_API_KEY", "LANGSMITH_API_KEY"):
+    os.environ.pop(_var, None)
+
 from langgraph.graph import StateGraph, START, END
 from agents.state import VeriFrameState
 import agents.visual_agent as visual_agent
@@ -292,6 +301,7 @@ def llm_node(state: VeriFrameState) -> dict:
         
         return {
             "llm_score": score,
+            "llm_frame_timestamps": [round(f["timestamp"], 3) for f in suspicious],
             "llm_reasoning": reasoning,
             "frame_explanations": explanations,
             "tools_used": tools_used,

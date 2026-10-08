@@ -6,15 +6,15 @@ function FrameGallery({ thumbnails, explanations }) {
   if (!thumbnails || thumbnails.length === 0) {
     return (
       <div className="card" style={{ padding: '20px' }}>
-        <h4 style={{ fontSize: '15px', fontWeight: '700', marginBottom: '10px' }}>Flagged Suspicious Frames</h4>
-        <p style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>No frames flagged for deepfake reasoning.</p>
+        <h4 style={{ fontSize: '15px', fontWeight: '700', marginBottom: '10px' }}>Frames Reviewed by the LLM</h4>
+        <p style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>No frames were sent to the LLM.</p>
       </div>
     );
   }
 
   return (
     <div className="card" style={{ padding: '20px' }}>
-      <h4 style={{ fontSize: '15px', fontWeight: '700', marginBottom: '12px' }}>Flagged Suspicious Frames</h4>
+      <h4 style={{ fontSize: '15px', fontWeight: '700', marginBottom: '12px' }}>Frames Reviewed by the LLM</h4>
       
       <div style={{
         display: 'grid',
@@ -24,10 +24,10 @@ function FrameGallery({ thumbnails, explanations }) {
         {thumbnails.map((item, idx) => {
           const tsVal = Number(item.timestamp);
           // Fuzzy match within 0.15 seconds to prevent floating point rounding mismatches (e.g. 0.48 vs 0.479)
-          const matchedKey = Object.keys(explanations || {}).find(key => Math.abs(Number(key) - tsVal) < 0.15);
-          const explanation = (matchedKey && explanations[matchedKey]) 
-            ? explanations[matchedKey] 
-            : `Flagged at t=${item.timestamp}s due to elevated spatial noise variance and temporal motion anomalies.`;
+          const matchedKey = Object.keys(explanations || {}).find(key => Math.abs(parseFloat(key) - tsVal) < 0.15);
+          const explanation = (matchedKey && explanations[matchedKey])
+            ? explanations[matchedKey]
+            : 'No LLM explanation is available for this frame.';
 
           return (
             <div 

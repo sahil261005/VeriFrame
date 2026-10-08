@@ -21,8 +21,8 @@ except ImportError:
 MODEL_DIR = os.path.join(os.path.dirname(__file__), "..", "model_onnx")
 ONNX_MODEL_PATH = os.path.join(MODEL_DIR, "model_quantized.onnx")
 
-# where the face-swap ViT runs. with GEN_API_URL set (production) it runs on the hosted Space so a 512MB
-# Render instance does not have to hold the model (~200MB in memory); otherwise the local ONNX file is used.
+# where the face-swap ViT runs. by default (and in production) the local ONNX file in model_onnx/ is used;
+# setting GEN_API_URL sends frames to an external scoring service instead, so the host doesn't hold the model.
 FACESWAP_BACKEND = os.environ.get("FACESWAP_BACKEND", "remote" if remote_detector.GEN_API_URL else "local")
 
 

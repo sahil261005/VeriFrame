@@ -276,7 +276,8 @@ def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, 
         data = json.loads(response.text)
         overall_score = _clamp_score(data.get("overall_fake_score", 0.1))
         summary_reasoning = data.get("summary_reasoning", "Gemini analysis completed.")
-        frame_explanations = data.get("frame_explanations", {})
+        # Gemini sometimes labels frames "1.333s"; keep plain timestamps like the Groq path so the UI can match them
+        frame_explanations = {str(k).strip().rstrip("s").strip(): v for k, v in (data.get("frame_explanations") or {}).items()}
 
         tools_list = sorted(list(all_tools_used))
         reasoning = f"Gemini 3.5 Flash-Lite batch-analyzed {len(suspicious_frames)} frames (Tools: {', '.join(tools_list)}): {summary_reasoning}"

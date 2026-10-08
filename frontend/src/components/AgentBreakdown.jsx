@@ -4,9 +4,14 @@ function AgentBreakdown({ breakdown, isPartial }) {
   const visual = breakdown?.visual_agent || {};
   const temporal = breakdown?.temporal_agent || {};
   const audio = breakdown?.audio_agent || {};
-  const generative = breakdown?.generative_agent || {};
   const llm = breakdown?.llm_agent || {};
   const provenance = breakdown?.provenance_agent || {};
+
+  // llm_agent.reasoning starts with "<provider> ...analyzed N frames (Tools: ...)", then Gemini's summary after "): "
+  const llmReasoning = llm.reasoning || '';
+  const llmProvider = llmReasoning.startsWith('Gemini') ? 'Gemini' : llmReasoning.startsWith('Groq') ? 'Groq' : 'LLM';
+  const summaryStart = llmReasoning.indexOf('): ');
+  const llmSummary = llm.status === 'success' && summaryStart !== -1 ? llmReasoning.slice(summaryStart + 3) : llmReasoning;
 
   return (
     <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -38,7 +43,7 @@ function AgentBreakdown({ breakdown, isPartial }) {
         }}>
           <strong>Content Credentials (C2PA) found:</strong>{' '}
           {provenance.c2pa_ai_generated
-            ? `the file's signed metadata declares it AI-generated${provenance.c2pa_generator ? ` by ${provenance.c2pa_generator}` : ''}.`
+            ? `the file's signed metadata declares it AI-generated${provenance.c2pa_generator ? ` (signed with ${provenance.c2pa_generator})` : ''}. This alone is strong evidence, so the verdict is at least 95% manipulated.`
             : `signed by ${provenance.c2pa_generator || 'an unknown tool'}, with no AI-generation declared.`}
           {!provenance.c2pa_signature_valid && ' (signature could not be verified)'}
         </div>
@@ -59,7 +64,7 @@ function AgentBreakdown({ breakdown, isPartial }) {
           </div>
           <h4 style={{ fontSize: '16px', fontWeight: '700', marginBottom: '6px' }}>Visual Forensics</h4>
           <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
-            Inspects spatial face classification and frame noise consistency.
+            Face-swap detector (ViT) on frames that contain a face. It is not built to spot fully AI-generated video.
           </p>
           <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '12px', display: 'flex', justifyContent: 'space-between', fontSize: '14px' }}>
             <span style={{ color: 'var(--text-secondary)' }}>Fake Rating</span>
@@ -103,38 +108,23 @@ function AgentBreakdown({ breakdown, isPartial }) {
           </div>
         </div>
 
-        {/* Generative Video Card */}
-        <div className="card" style={{ opacity: generative.status === 'failed' ? 0.5 : 1 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-            <span style={{ fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase', color: '#8b5cf6' }}>[ Generative ]</span>
-            <span className={`badge ${generative.status === 'success' ? 'badge-authentic' : generative.status === 'skipped' ? 'badge-uncertain' : 'badge-manipulated'}`} style={{ border: 'none' }}>
-              {generative.status === 'skipped' ? 'Not Installed' : generative.status}
-            </span>
-          </div>
-          <h4 style={{ fontSize: '16px', fontWeight: '700', marginBottom: '6px' }}>AI-Generated Video</h4>
-          <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
-            Scans whole frames for artifacts of AI video models such as Sora, Kling, Runway and Veo.
-          </p>
-          <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '12px', display: 'flex', justifyContent: 'space-between', fontSize: '14px' }}>
-            <span style={{ color: 'var(--text-secondary)' }}>AI-Generated Score</span>
-            <strong style={{ color: 'var(--text-primary)' }}>{generative.status === 'success' ? (generative.score || 0.0).toFixed(2) : 'N/A'}</strong>
-          </div>
-        </div>
-
         {/* LLM Card */}
         <div className="card" style={{ opacity: llm.status === 'failed' ? 0.5 : 1 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-            <span style={{ fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase', color: 'var(--success)' }}>[ Semantic ]</span>
+            <span style={{ fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase', color: 'var(--success)' }}>[ {llmProvider} ]</span>
             <span className={`badge ${llm.status === 'success' ? 'badge-authentic' : llm.status === 'skipped' ? 'badge-uncertain' : 'badge-manipulated'}`} style={{ border: 'none' }}>
               {llm.status}
             </span>
           </div>
-          <h4 style={{ fontSize: '16px', fontWeight: '700', marginBottom: '6px' }}>Semantic Coherence</h4>
-          <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
-            Evaluates contextual sync and high-level scene consistency.
+          <h4 style={{ fontSize: '16px', fontWeight: '700', marginBottom: '6px' }}>LLM Reasoning</h4>
+          <p
+            title={llmSummary}
+            style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '16px', display: '-webkit-box', WebkitLineClamp: 5, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
+          >
+            {llmSummary || 'A vision LLM reviews the most suspicious frames and explains what looks wrong.'}
           </p>
           <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '12px', display: 'flex', justifyContent: 'space-between', fontSize: '14px' }}>
-            <span style={{ color: 'var(--text-secondary)' }}>Average Score</span>
+            <span style={{ color: 'var(--text-secondary)' }}>Fake Score</span>
             <strong style={{ color: 'var(--text-primary)' }}>{llm.status === 'failed' ? '0.00' : (llm.score || 0.0).toFixed(2)}</strong>
           </div>
         </div>

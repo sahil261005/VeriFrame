@@ -75,6 +75,14 @@ function ResultsDashboard() {
   const metadata = report.video_metadata || {};
   const performance = report.performance || {};
   const robustnessScore = metadata.robustness_score || 1.0;
+
+  // hover text for "Analyzed in": where the time went (frame extraction + each pipeline stage)
+  const stageLabels = { cv_parallel: 'CV agents', router: 'router', llm: 'LLM', reflection: 'reflection', synthesis: 'synthesis', generative: 'AI-gen detector' };
+  const stages = [
+    ...(performance.extract_seconds != null ? [['frame extraction', performance.extract_seconds]] : []),
+    ...Object.entries(performance.stage_seconds || {}).map(([k, v]) => [stageLabels[k] || k, v]),
+  ];
+  const stageBreakdown = stages.map(([name, secs]) => `${name}: ${Number(secs).toFixed(1)}s`).join('\n');
   
   const getRobustnessLabel = (score) => {
     if (score >= 0.8) return 'High';
@@ -153,7 +161,7 @@ function ResultsDashboard() {
               {performance.total_seconds != null && (
                 <>
                   <span>•</span>
-                  <span>
+                  <span title={stageBreakdown} style={{ cursor: stageBreakdown ? 'help' : 'default' }}>
                     Analyzed in {performance.total_seconds.toFixed(1)}s
                     {performance.llm_cost_usd != null && performance.llm_calls > 0 && ` · LLM cost $${performance.llm_cost_usd.toFixed(4)}`}
                   </span>
