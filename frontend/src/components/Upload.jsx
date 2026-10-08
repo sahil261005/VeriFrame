@@ -2,13 +2,13 @@ import React, { useState, useRef } from 'react';
 import { CloudUpload, FileVideo, ScanFace, Activity, AudioWaveform, BadgeCheck, BrainCircuit, Scale, TriangleAlert, X } from 'lucide-react';
 import { analysisService } from '../api';
 
-const AGENTS = [
-  { icon: ScanFace, name: 'Visual', desc: 'Face-swap ViT' },
-  { icon: Activity, name: 'Temporal', desc: 'Motion & landmarks' },
-  { icon: AudioWaveform, name: 'Audio', desc: 'Voice & lip-sync' },
-  { icon: BadgeCheck, name: 'Provenance', desc: 'C2PA credentials' },
-  { icon: BrainCircuit, name: 'LLM', desc: 'Gemini · Groq fallback' },
-  { icon: Scale, name: 'Consensus', desc: 'Weighted verdict' },
+const CHECKS = [
+  { icon: ScanFace, name: 'Face-swap detector', desc: 'Vision Transformer on each keyframe', tech: 'ViT · ONNX' },
+  { icon: Activity, name: 'Motion consistency', desc: 'Flicker and landmark jitter between frames', tech: 'optical flow' },
+  { icon: AudioWaveform, name: 'Audio and lip-sync', desc: 'Synthetic-voice cues, mouth-to-voice timing', tech: 'spectral' },
+  { icon: BadgeCheck, name: 'Content Credentials', desc: 'Signed "made by AI" labels inside the file', tech: 'C2PA' },
+  { icon: BrainCircuit, name: 'Vision LLM', desc: 'Explains what looks wrong in the riskiest frames', tech: 'Gemini · Groq' },
+  { icon: Scale, name: 'Consensus', desc: 'Weighs the evidence; says Uncertain when it is thin', tech: 'LangGraph' },
 ];
 
 function Upload({ onUploadSuccess }) {
@@ -73,16 +73,30 @@ function Upload({ onUploadSuccess }) {
   };
 
   return (
-    <div className="fade-up">
-      <div className="hero">
-        <span className="eyebrow"><span className="live-dot" /> 6 forensic agents · LangGraph orchestration</span>
-        <h1>Is this video <span className="gradient-text">real?</span></h1>
-        <p>Upload a clip. Specialist agents check faces, motion, audio and provenance in parallel, and an LLM explains what it sees, frame by frame.</p>
+    <div className="intake">
+      <div>
+        <span className="label">New case</span>
+        <h1>Check a video before you <em>trust</em> it.</h1>
+        <p className="intake-lede">
+          Six forensic checks run on your clip. Each one reports its own evidence, and VeriFrame
+          explains its verdict frame by frame.
+        </p>
+        <div className="checks">
+          {CHECKS.map(({ icon: Icon, name, desc, tech }) => (
+            <div key={name} className="check-row">
+              <Icon size={16} />
+              <div><strong>{name}</strong> <span className="muted">· {desc}</span></div>
+              <span className="mono">{tech}</span>
+            </div>
+          ))}
+        </div>
       </div>
 
-      <div className="card" style={{ maxWidth: '760px', margin: '0 auto', padding: '26px' }}>
+      <div className="card" style={{ padding: '22px' }}>
+        <div className="section-title"><h2>Upload evidence</h2><span className="label">mp4 · mov · avi · webm</span></div>
+
         {error && (
-          <div className="banner banner-danger" style={{ marginBottom: '18px' }}>
+          <div className="banner banner-danger" style={{ marginBottom: '16px' }}>
             <TriangleAlert size={18} />
             <span>{error}</span>
           </div>
@@ -90,6 +104,7 @@ function Upload({ onUploadSuccess }) {
 
         <form onDragEnter={handleDrag} onSubmit={(e) => e.preventDefault()}>
           <input
+            id="video-file"
             ref={fileInputRef}
             type="file"
             style={{ display: 'none' }}
@@ -98,18 +113,14 @@ function Upload({ onUploadSuccess }) {
           />
 
           {file ? (
-            <div className="dropzone" style={{ cursor: 'default', padding: '28px 20px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '14px', justifyContent: 'center', textAlign: 'left' }}>
-                <div className="dropzone-icon" style={{ margin: 0 }}><FileVideo size={26} /></div>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontWeight: 600, fontSize: '15px', maxWidth: '420px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {file.name}
-                  </div>
-                  <div className="mono muted" style={{ fontSize: '12.5px', marginTop: '2px' }}>
-                    {(file.size / (1024 * 1024)).toFixed(2)} MB · ready to scan
-                  </div>
+            <div className="dropzone" style={{ cursor: 'default', padding: '22px', textAlign: 'left' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                <div className="dropzone-icon" style={{ margin: 0, flexShrink: 0 }}><FileVideo size={22} /></div>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div className="mono" style={{ fontSize: '14px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name}</div>
+                  <div className="muted" style={{ fontSize: '13px' }}>{(file.size / (1024 * 1024)).toFixed(2)} MB</div>
                 </div>
-                <button type="button" className="btn btn-ghost" onClick={() => setFile(null)} disabled={loading} aria-label="Clear selection" style={{ padding: '8px' }}>
+                <button type="button" className="btn btn-ghost" onClick={() => setFile(null)} disabled={loading} aria-label="Remove file" style={{ padding: '8px' }}>
                   <X size={18} />
                 </button>
               </div>
@@ -123,31 +134,18 @@ function Upload({ onUploadSuccess }) {
               onDragLeave={handleDrag}
               onDrop={handleDrop}
             >
-              <div className="dropzone-icon"><CloudUpload size={26} /></div>
-              <div style={{ fontSize: '15px', color: 'var(--text-secondary)' }}>
-                <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>Click to choose a video</span> or drag and drop it here
+              <div className="dropzone-icon"><CloudUpload size={22} /></div>
+              <div style={{ fontSize: '15px' }}>
+                <strong>Choose a video</strong> <span className="muted">or drop it here</span>
               </div>
-              <div className="muted" style={{ fontSize: '12.5px', marginTop: '6px' }}>
-                MP4, MOV, AVI or WEBM · up to 30 seconds · up to ~720p
-              </div>
+              <div className="muted" style={{ fontSize: '13px', marginTop: '6px' }}>Up to 30 seconds and about 720p</div>
             </div>
           )}
 
-          {file && (
-            <button type="button" className="btn" style={{ width: '100%', marginTop: '16px', padding: '13px' }} onClick={handleUpload} disabled={loading}>
-              {loading ? <><span className="spinner" style={{ width: 16, height: 16 }} /> Uploading…</> : <><ScanFace size={17} /> Run forensic analysis</>}
-            </button>
-          )}
+          <button type="button" className="btn" style={{ width: '100%', marginTop: '14px', padding: '12px' }} onClick={handleUpload} disabled={!file || loading}>
+            {loading ? <><span className="spinner" style={{ width: 15, height: 15, borderColor: 'rgba(255,255,255,0.3)', borderLeftColor: '#fff' }} /> Uploading…</> : 'Analyze video'}
+          </button>
         </form>
-
-        <div className="agent-strip">
-          {AGENTS.map(({ icon: Icon, name, desc }) => (
-            <div key={name} className="agent-strip-item">
-              <Icon size={18} />
-              <div><strong>{name}</strong>{desc}</div>
-            </div>
-          ))}
-        </div>
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Eye, X, BrainCircuit } from 'lucide-react';
+import { X } from 'lucide-react';
 
 function FrameGallery({ thumbnails, explanations }) {
   const [selectedFrame, setSelectedFrame] = useState(null);
@@ -22,9 +22,9 @@ function FrameGallery({ thumbnails, explanations }) {
 
   return (
     <div className="card">
-      <div className="section-title" style={{ justifyContent: 'space-between' }}>
-        <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><Eye size={14} /> Frames reviewed by the LLM</span>
-        {frames.length > 0 && <span className="muted" style={{ textTransform: 'none', letterSpacing: 0, fontWeight: 500 }}>Click a frame for the full explanation</span>}
+      <div className="section-title">
+        <h2>Frames the LLM reviewed</h2>
+        {frames.length > 0 && <span className="label">select a frame for the full note</span>}
       </div>
 
       {frames.length === 0 ? (
@@ -58,9 +58,9 @@ function FrameGallery({ thumbnails, explanations }) {
             <img
               src={selectedFrame.image_b64}
               alt={`Frame at ${selectedFrame.timestamp}s`}
-              style={{ width: '100%', maxHeight: '340px', objectFit: 'contain', borderRadius: '10px', background: '#000', border: '1px solid var(--border)', marginBottom: '14px' }}
+              style={{ width: '100%', maxHeight: '340px', objectFit: 'contain', borderRadius: '4px', background: '#111', marginBottom: '14px' }}
             />
-            <div className="section-title" style={{ marginBottom: '6px' }}><BrainCircuit size={14} /> LLM forensic note</div>
+            <div className="label" style={{ marginBottom: '6px' }}>LLM forensic note</div>
             <p style={{ fontSize: '14px', lineHeight: 1.6, color: 'var(--text-primary)' }}>{selectedFrame.explanation}</p>
           </div>
         </div>,

@@ -7,14 +7,14 @@ import { analysisService } from '../api';
 // `rank` orders the graph (visual/temporal/audio run in parallel), `weight` is the share of the progress bar
 // (roughly how long the stage takes), `tau` is how fast the bar creeps while the stage is running (seconds)
 const STAGES = [
-  { key: 'ingest', name: 'Frame extraction', desc: 'Keyframes, motion bursts and C2PA check', icon: Film, rank: 0, weight: 8, tau: 3 },
-  { key: 'visual', match: 'Visual Forensics', name: 'Visual agent', desc: 'Face-swap ViT on every keyframe', icon: ScanFace, rank: 1, weight: 12, tau: 6 },
-  { key: 'temporal', match: 'Temporal Consistency', name: 'Temporal agent', desc: 'Optical flow and landmark jitter', icon: Activity, rank: 1, weight: 8, tau: 4 },
-  { key: 'audio', match: 'Audio Forensics', name: 'Audio agent', desc: 'Spectral cutoff, cadence, lip-sync', icon: AudioWaveform, rank: 1, weight: 7, tau: 4 },
-  { key: 'router', match: 'Conditional Router', name: 'Router', desc: 'Picks the riskiest frames for the LLM', icon: GitBranch, rank: 2, weight: 3, tau: 1 },
-  { key: 'llm', match: 'Cognitive Reasoning', name: 'LLM reasoning', desc: 'Gemini (Groq fallback) explains each frame', icon: BrainCircuit, rank: 3, weight: 40, tau: 6 },
-  { key: 'reflection', match: 'Reflection', name: 'Reflection', desc: 'Audits the LLM for contradictions', icon: RefreshCw, rank: 4, weight: 7, tau: 2 },
-  { key: 'consensus', match: 'Consensus Engine', name: 'Consensus', desc: 'Weighted multi-agent verdict', icon: Scale, rank: 5, weight: 13, tau: 1 },
+  { key: 'ingest', short: 'frames', name: 'Frame extraction', desc: 'Keyframes, motion bursts and C2PA check', icon: Film, rank: 0, weight: 8, tau: 3 },
+  { key: 'visual', short: 'visual', match: 'Visual Forensics', name: 'Visual agent', desc: 'Face-swap ViT on every keyframe', icon: ScanFace, rank: 1, weight: 12, tau: 6 },
+  { key: 'temporal', short: 'motion', match: 'Temporal Consistency', name: 'Temporal agent', desc: 'Optical flow and landmark jitter', icon: Activity, rank: 1, weight: 8, tau: 4 },
+  { key: 'audio', short: 'audio', match: 'Audio Forensics', name: 'Audio agent', desc: 'Spectral cutoff, cadence, lip-sync', icon: AudioWaveform, rank: 1, weight: 7, tau: 4 },
+  { key: 'router', short: 'route', match: 'Conditional Router', name: 'Router', desc: 'Picks the riskiest frames for the LLM', icon: GitBranch, rank: 2, weight: 3, tau: 1 },
+  { key: 'llm', short: 'LLM reasoning', match: 'Cognitive Reasoning', name: 'LLM reasoning', desc: 'Gemini (Groq fallback) explains each frame', icon: BrainCircuit, rank: 3, weight: 40, tau: 6 },
+  { key: 'reflection', short: 'reflect', match: 'Reflection', name: 'Reflection', desc: 'Audits the LLM for contradictions', icon: RefreshCw, rank: 4, weight: 7, tau: 2 },
+  { key: 'consensus', short: 'verdict', match: 'Consensus Engine', name: 'Consensus', desc: 'Weighted multi-agent verdict', icon: Scale, rank: 5, weight: 13, tau: 1 },
 ];
 
 const finalState = (message) => {
@@ -117,14 +117,18 @@ function StatusFeed({ jobId, onAnalysisComplete }) {
   // progress target: finished stages count fully, running stages creep towards 90% of their share
   // (a stage is running since its first streamed event; frame extraction since the page opened)
   let target = 0;
+  const stageFill = {};
   for (const stage of STAGES) {
     const state = states[stage.key];
-    if (state === 'done' || state === 'skipped' || state === 'failed') target += stage.weight;
+    let fill = 0;
+    if (state === 'done' || state === 'skipped' || state === 'failed') fill = 1;
     else if (state === 'active') {
       const first = stage.match ? events.find((e) => e.agent.includes(stage.match)) : null;
       const elapsed = Math.max(0, now - (first ? first.t : startTime)) / 1000;
-      target += stage.weight * 0.9 * (1 - Math.exp(-elapsed / stage.tau));
+      fill = 0.9 * (1 - Math.exp(-elapsed / stage.tau));
     }
+    stageFill[stage.key] = fill;
+    target += stage.weight * fill;
   }
   target = completed ? 100 : Math.min(target, 98);
 
@@ -167,76 +171,51 @@ function StatusFeed({ jobId, onAnalysisComplete }) {
   const current = [...STAGES].reverse().find((s) => states[s.key] === 'active');
   const elapsed = ((now - startTime) / 1000).toFixed(1);
 
-  const size = 220;
-  const stroke = 12;
-  const radius = (size - stroke) / 2;
-  const circumference = 2 * Math.PI * radius;
-
   if (error) {
     return (
-      <div className="card fade-up" style={{ maxWidth: '560px', margin: '48px auto 0', textAlign: 'center', padding: '36px' }}>
-        <div className="dropzone-icon" style={{ background: 'var(--danger-soft)', color: 'var(--danger)', borderColor: 'rgba(248,113,113,0.35)' }}>
-          <TriangleAlert size={26} />
-        </div>
-        <h2 style={{ fontSize: '20px', marginBottom: '6px' }}>Analysis failed</h2>
-        <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>{error}</p>
-        <button className="btn" onClick={() => onAnalysisComplete?.(jobId)}>Scan another video</button>
+      <div className="card" style={{ maxWidth: '560px', margin: '48px auto 0', padding: '32px' }}>
+        <span className="badge badge-manipulated"><TriangleAlert size={13} /> Failed</span>
+        <h1 style={{ fontSize: '26px', margin: '14px 0 6px' }}>The analysis did not finish</h1>
+        <p style={{ color: 'var(--ink-2)', marginBottom: '20px' }}>{error}</p>
+        <button className="btn" onClick={() => onAnalysisComplete?.(jobId)}>Upload another video</button>
       </div>
     );
   }
 
   return (
-    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+    <div>
+      <div className="run-head">
         <div>
-          <span className="eyebrow"><span className="live-dot" /> Real-Time LangGraph SSE Stream</span>
-          <h2 style={{ fontSize: '24px', fontWeight: 800, letterSpacing: '-0.02em', marginTop: '12px' }}>
-            {completed ? 'Analysis complete' : 'Running the multi-agent graph'}
-          </h2>
+          <span className="label live-pill">{!completed && <span className="live-dot" />}Live LangGraph stream · case {jobId.slice(0, 8)}</span>
+          <h1>{completed ? 'Analysis complete' : 'Analyzing your video'}</h1>
         </div>
-        <span className="chip mono">elapsed <strong>{elapsed}s</strong></span>
+        <span className="mono muted" style={{ fontSize: '13px' }}>elapsed {elapsed}s</span>
       </div>
 
-      <div className="live-grid">
-        <div className="card ring-wrap">
-          <div className="ring">
-            <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className={completed ? '' : 'ring-glow'}>
-              <defs>
-                <linearGradient id="ringGradient" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0%" stopColor="#6366f1" />
-                  <stop offset="100%" stopColor="#22d3ee" />
-                </linearGradient>
-              </defs>
-              <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="rgba(148,163,184,0.12)" strokeWidth={stroke} />
-              <circle
-                cx={size / 2}
-                cy={size / 2}
-                r={radius}
-                fill="none"
-                stroke={completed ? 'var(--success)' : 'url(#ringGradient)'}
-                strokeWidth={stroke}
-                strokeLinecap="round"
-                strokeDasharray={circumference}
-                strokeDashoffset={circumference * (1 - pct / 100)}
-              />
-            </svg>
-            <div className="ring-center">
-              <div className="ring-value">{Math.floor(pct)}<small>%</small></div>
-              <div className="ring-label">{pct >= 100 ? 'complete' : completed ? 'finishing' : 'analyzing'}</div>
-            </div>
-          </div>
-          <div style={{ minHeight: '42px' }}>
-            <div style={{ fontWeight: 600, fontSize: '14px' }}>
-              {completed ? 'Opening the forensic report…' : current ? current.name : 'Connecting…'}
-            </div>
-            <div className="muted" style={{ fontSize: '12.5px' }}>
-              {completed ? 'Verdict ready' : current ? current.desc : 'Waiting for the first agent event'}
-            </div>
+      <div className="card progress-sheet">
+        <div className="progress-top">
+          <div className="progress-pct">{Math.floor(pct)}<small>%</small></div>
+          <div className="progress-now">
+            <span className="label">{completed ? 'done' : 'now running'}</span>
+            <strong>{completed ? 'Opening the report…' : current ? current.name : 'Connecting…'}</strong>
+            <span className="muted" style={{ fontSize: '13px' }}>{completed ? 'Verdict ready' : current ? current.desc : 'Waiting for the first agent event'}</span>
           </div>
         </div>
+        <div className="segbar" role="progressbar" aria-valuenow={Math.floor(pct)} aria-valuemin={0} aria-valuemax={100}>
+          {STAGES.map((stage) => (
+            <div key={stage.key} className={`seg ${states[stage.key]}`} style={{ flex: stage.weight }}>
+              <div className="seg-fill" style={{ width: `${(completed ? 1 : stageFill[stage.key]) * 100}%` }} />
+            </div>
+          ))}
+        </div>
+        <div className="seg-labels">
+          {STAGES.map((stage) => <span key={stage.key} style={{ flex: stage.weight }}>{stage.short}</span>)}
+        </div>
+      </div>
 
+      <div className="run-grid">
         <div className="card">
-          <div className="section-title"><GitBranch size={14} /> Agent graph</div>
+          <div className="section-title"><h2>Agent graph</h2><span className="label">{Object.values(states).filter((v) => v !== 'pending' && v !== 'active').length} / {STAGES.length} finished</span></div>
           <div className="stepper">
             {STAGES.map((stage) => {
               const state = states[stage.key];
@@ -245,9 +224,9 @@ function StatusFeed({ jobId, onAnalysisComplete }) {
               return (
                 <div key={stage.key} className={`step ${state}`}>
                   <div className="step-icon">
-                    {state === 'active' ? <LoaderCircle size={17} style={{ animation: 'spin 1s linear infinite' }} /> : StateIcon ? <StateIcon size={17} /> : <Icon size={17} />}
+                    {state === 'active' ? <LoaderCircle size={15} style={{ animation: 'spin 1s linear infinite' }} /> : StateIcon ? <StateIcon size={15} /> : <Icon size={15} />}
                   </div>
-                  <div>
+                  <div style={{ minWidth: 0 }}>
                     <div className="step-name">{stage.name}</div>
                     <div className="step-desc">{stage.desc}</div>
                   </div>
@@ -257,26 +236,21 @@ function StatusFeed({ jobId, onAnalysisComplete }) {
             })}
           </div>
         </div>
-      </div>
 
-      <div className="card">
-        <div className="section-title"><Terminal size={14} /> Live event stream</div>
-        <div className="terminal" ref={logRef}>
-          <div className="terminal-bar">
-            <i style={{ background: '#f87171' }} /><i style={{ background: '#fbbf24' }} /><i style={{ background: '#34d399' }} />
-            <span style={{ marginLeft: '8px' }}>GET /stream/{jobId.slice(0, 8)}… · text/event-stream</span>
+        <div className="card">
+          <div className="section-title"><h2>Event stream</h2><span className="label"><Terminal size={12} style={{ verticalAlign: '-2px' }} /> text/event-stream</span></div>
+          <div className="terminal" ref={logRef}>
+            {events.length === 0 ? (
+              <div className="muted">Connecting to the agent stream…</div>
+            ) : (
+              events.map((evt, idx) => (
+                <div key={idx} className="log-line">
+                  <span className="log-time">+{((evt.t - startTime) / 1000).toFixed(1)}s</span>
+                  <span><span className="log-agent">{evt.agent}</span><span className="log-msg">{evt.message}</span></span>
+                </div>
+              ))
+            )}
           </div>
-          {events.length === 0 ? (
-            <div className="muted">Connecting to the agent stream…</div>
-          ) : (
-            events.map((evt, idx) => (
-              <div key={idx} className="log-line">
-                <span className="log-time">+{((evt.t - startTime) / 1000).toFixed(1)}s</span>
-                <span className="log-agent">{evt.agent}</span>
-                <span className="log-msg">{evt.message}</span>
-              </div>
-            ))
-          )}
         </div>
       </div>
     </div>

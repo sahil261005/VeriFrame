@@ -1,5 +1,6 @@
 import React from 'react';
-import { ScanFace, Activity, AudioWaveform, BrainCircuit, BadgeCheck, TriangleAlert, ShieldAlert, Layers } from 'lucide-react';
+import { ScanFace, Activity, AudioWaveform, BrainCircuit, BadgeCheck, TriangleAlert, ShieldAlert } from 'lucide-react';
+import ThresholdMeter from './ThresholdMeter';
 
 const STATUS_BADGE = {
   success: ['badge-authentic', 'Ran'],
@@ -9,17 +10,15 @@ const STATUS_BADGE = {
 };
 
 // 0 = looks real (green) ... 1 = looks fake (red)
-const scoreColor = (s) => (s >= 0.48 ? 'var(--danger)' : s >= 0.3 ? 'var(--warning)' : 'var(--success)');
+const scoreColor = (s) => (s >= 0.48 ? 'var(--bad)' : s >= 0.3 ? 'var(--warn)' : 'var(--ok)');
 
-function AgentCard({ icon: Icon, accent, title, status, badgeText, description, scoreLabel, score, footnote }) {
+function AgentCard({ icon: Icon, title, status, badgeText, description, scoreLabel, score, footnote }) {
   const [badgeClass, defaultText] = STATUS_BADGE[status] || ['badge-neutral', status || 'n/a'];
   const hasScore = typeof score === 'number';
   return (
     <div className="card agent-card" style={{ opacity: status === 'failed' ? 0.6 : 1 }}>
       <div className="agent-head">
-        <div className="agent-icon" style={{ color: accent, background: `color-mix(in srgb, ${accent} 12%, transparent)` }}>
-          <Icon size={19} />
-        </div>
+        <div className="agent-icon"><Icon size={16} /></div>
         <span className={`badge ${badgeClass}`}>{badgeText || defaultText}</span>
       </div>
       <div className="agent-name">{title}</div>
@@ -30,9 +29,7 @@ function AgentCard({ icon: Icon, accent, title, status, badgeText, description, 
         <span>{scoreLabel}</span>
         <strong style={{ color: hasScore ? scoreColor(score) : 'var(--text-muted)' }}>{hasScore ? score.toFixed(2) : 'N/A'}</strong>
       </div>
-      <div className="score-track">
-        <div className="score-fill" style={{ width: hasScore ? `${Math.max(2, score * 100)}%` : '0%', background: hasScore ? scoreColor(score) : 'transparent' }} />
-      </div>
+      {hasScore ? <ThresholdMeter score={score} color={scoreColor(score)} compact /> : <div className="meter" style={{ height: '6px', opacity: 0.45 }} />}
       {footnote && <div className="muted" style={{ fontSize: '11.5px' }}>{footnote}</div>}
     </div>
   );
@@ -77,14 +74,14 @@ function AgentBreakdown({ breakdown, isPartial }) {
         </div>
       )}
 
-      <div className="section-title" style={{ marginBottom: 0, marginTop: '4px' }}>
-        <Layers size={14} /> Agent evidence <span className="muted" style={{ textTransform: 'none', letterSpacing: 0, fontWeight: 500 }}>· score 0 = looks real, 1 = looks fake</span>
+      <div className="section-title" style={{ marginBottom: 0, marginTop: '6px' }}>
+        <h2>Evidence by agent</h2>
+        <span className="label">0 looks real · 1 looks fake · ticks at .30 and .48</span>
       </div>
 
       <div className="agent-grid">
         <AgentCard
           icon={ScanFace}
-          accent="#7c83ff"
           title="Visual forensics"
           status={visual.status}
           badgeText={visual.status === 'skipped' ? (visualSkippedForC2pa ? 'Not needed' : 'No face') : undefined}
@@ -96,7 +93,6 @@ function AgentBreakdown({ breakdown, isPartial }) {
         />
         <AgentCard
           icon={Activity}
-          accent="#fbbf24"
           title="Temporal consistency"
           status={temporal.status}
           description="Compares consecutive frames for sudden motion spikes and facial-landmark jitter."
@@ -106,7 +102,6 @@ function AgentBreakdown({ breakdown, isPartial }) {
         />
         <AgentCard
           icon={AudioWaveform}
-          accent="#f472b6"
           title="Audio & lip-sync"
           status={audio.has_audio ? audio.status : 'skipped'}
           badgeText={!audio.has_audio ? 'Silent' : undefined}
@@ -116,7 +111,6 @@ function AgentBreakdown({ breakdown, isPartial }) {
         />
         <AgentCard
           icon={BrainCircuit}
-          accent="#22d3ee"
           title={`LLM reasoning · ${llmProvider}`}
           status={llm.status}
           description={llmSummary || 'A vision LLM reviews the most suspicious frames and explains what looks wrong.'}
