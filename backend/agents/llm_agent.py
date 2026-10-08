@@ -8,6 +8,10 @@ import logging
 from PIL import Image
 import cv2
 from concurrent.futures import ThreadPoolExecutor
+
+# imported at startup rather than inside the first request: the import costs over a second on a fractional-CPU host
+from google import genai
+from google.genai import types
 from agents.tools import TOOL_REGISTRY
 
 logger = logging.getLogger(__name__)
@@ -169,8 +173,6 @@ def run_tools_for_frame(frame_data, all_frames=None, metadata=None):
 
 def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, all_frames=None, api_key=None, audio_details=None, usage=None):
     # sends frames to Gemini 3.5 Flash-Lite for multi-image analysis and gets back a JSON verdict
-    from google import genai
-    from google.genai import types
 
     client = genai.Client(api_key=api_key)
     contents = []
