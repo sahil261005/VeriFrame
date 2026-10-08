@@ -209,11 +209,11 @@ def _process_video(job_id: str, temp_path: str, meta: dict):
             img_array = f["image"]
             
             h, w = img_array.shape[:2]
-            target_w = 200
+            target_w = 480  # shown as cards on the results page
             target_h = int(h * (target_w / w))
             resized = cv2.resize(img_array, (target_w, target_h))
             
-            _, buffer = cv2.imencode(".jpg", resized, [cv2.IMWRITE_JPEG_QUALITY, 40])
+            _, buffer = cv2.imencode(".jpg", resized, [cv2.IMWRITE_JPEG_QUALITY, 70])
             img_base64 = base64.b64encode(buffer).decode("utf-8")
             
             thumbnails_list.append({

@@ -45,6 +45,7 @@ def reduce_sum(left: dict, right: dict) -> dict:
 
 class VeriFrameState(TypedDict, total=False):
     # input stuff
+    job_id: str               # must be declared: LangGraph drops undeclared keys, which silenced every live SSE event
     video_path: str
     metadata: Dict[str, Any]
     frames: List[Dict[str, Any]]
