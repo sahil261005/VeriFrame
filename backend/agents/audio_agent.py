@@ -18,7 +18,7 @@ def extract_audio_wav(video_path, output_wav):
             "-vn", "-ac", "1", "-ar", "16000",
             output_wav
         ]
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60)
         if res.returncode == 0 and os.path.exists(output_wav) and os.path.getsize(output_wav) > 1000:
             return True
     except Exception as e:

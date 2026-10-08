@@ -73,6 +73,7 @@ function ResultsDashboard() {
   const thumbnails = data.thumbnails || [];
   const confidencePercent = (data.confidence * 100).toFixed(0);
   const metadata = report.video_metadata || {};
+  const performance = report.performance || {};
   const robustnessScore = metadata.robustness_score || 1.0;
   
   const getRobustnessLabel = (score) => {
@@ -149,6 +150,15 @@ function ResultsDashboard() {
               <span>
                 Robustness: <strong style={{ color: getRobustnessColor(robustnessScore) }}>{robustnessScore.toFixed(2)} ({getRobustnessLabel(robustnessScore)})</strong>
               </span>
+              {performance.total_seconds != null && (
+                <>
+                  <span>•</span>
+                  <span>
+                    Analyzed in {performance.total_seconds.toFixed(1)}s
+                    {performance.llm_cost_usd != null && performance.llm_calls > 0 && ` · LLM cost $${performance.llm_cost_usd.toFixed(4)}`}
+                  </span>
+                </>
+              )}
             </div>
           </div>
           

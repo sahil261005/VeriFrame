@@ -32,6 +32,17 @@ def reduce_events(left: list, right: list) -> list:
     return left + right
 
 
+def reduce_sum(left: dict, right: dict) -> dict:
+    """
+    reducer that adds numeric values per key. used for timings and LLM token usage, where a node can run
+    more than once (the reflection loop re-runs the LLM) and every run should count.
+    """
+    merged = dict(left or {})
+    for key, value in (right or {}).items():
+        merged[key] = merged.get(key, 0) + value
+    return merged
+
+
 class VeriFrameState(TypedDict, total=False):
     # input stuff
     video_path: str
@@ -42,6 +53,12 @@ class VeriFrameState(TypedDict, total=False):
     visual_score: float
     visual_flagged_frames: List[Dict[str, Any]]
     visual_per_frame: List[Dict[str, Any]]
+
+    # generative-video agent output (fully AI-generated footage: Sora/Kling/Runway/Veo...)
+    generative_score: float
+    generative_flagged_frames: List[Dict[str, Any]]
+    generative_per_frame: List[Dict[str, Any]]
+    generative_future: Any     # background future of the generative node, collected by synthesis
 
     # temporal agent output
     temporal_score: float
@@ -77,6 +94,10 @@ class VeriFrameState(TypedDict, total=False):
     # tracks which agents ran ok and which broke.
     # annotated with reduce_dict so parallel nodes can write to it at the same time.
     agent_status: Annotated[Dict[str, str], reduce_dict]
+
+    # per-node wall time in seconds and LLM token usage, summed across reflection-loop re-runs
+    timings: Annotated[Dict[str, float], reduce_sum]
+    llm_usage: Annotated[Dict[str, float], reduce_sum]
 
     # SSE streaming events for the frontend
     # annotated with reduce_events so parallel nodes can both push events

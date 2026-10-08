@@ -1,4 +1,5 @@
 import os
+import threading
 import io
 import base64
 import json
@@ -12,29 +13,94 @@ from agents.tools import TOOL_REGISTRY
 logger = logging.getLogger(__name__)
 
 
+class LLMUnavailableError(Exception):
+    """raised when no LLM provider is configured, so the agent is skipped rather than scored"""
+
+
+_usage_lock = threading.Lock()
+
+# Groq fallback vision model. Groq retired Llama 4 Scout (404 "model does not exist"), so this is configurable;
+# qwen/qwen3.8-27b accepts images and follows the [SCORE: X.XX] format.
+GROQ_VISION_MODEL = os.environ.get("GROQ_VISION_MODEL", "qwen/qwen3.8-27b")
+
+# USD per 1M tokens, from the provider's pricing page; set these on the server to get a cost per video.
+# left unset, token counts are still recorded but no dollar figure is computed.
+_PRICE_ENV = {
+    "gemini": ("GEMINI_INPUT_USD_PER_M", "GEMINI_OUTPUT_USD_PER_M"),
+    "groq": ("GROQ_INPUT_USD_PER_M", "GROQ_OUTPUT_USD_PER_M"),
+}
+
+
+def _record_usage(usage, provider, input_tokens, output_tokens):
+    """adds one API call's token counts to the shared usage dict (Groq calls run in parallel threads)."""
+    if usage is None:
+        return
+    with _usage_lock:
+        usage["llm_calls"] = usage.get("llm_calls", 0) + 1
+        usage[f"{provider}_input_tokens"] = usage.get(f"{provider}_input_tokens", 0) + int(input_tokens or 0)
+        usage[f"{provider}_output_tokens"] = usage.get(f"{provider}_output_tokens", 0) + int(output_tokens or 0)
+
+
+def estimate_cost_usd(usage):
+    """dollar cost of the recorded token usage, or None if prices are not configured."""
+    total = 0.0
+    priced = False
+    for provider, (in_env, out_env) in _PRICE_ENV.items():
+        tokens_in = usage.get(f"{provider}_input_tokens", 0)
+        tokens_out = usage.get(f"{provider}_output_tokens", 0)
+        if not tokens_in and not tokens_out:
+            continue
+        in_price, out_price = os.environ.get(in_env), os.environ.get(out_env)
+        if in_price is None or out_price is None:
+            return None
+        total += tokens_in / 1e6 * float(in_price) + tokens_out / 1e6 * float(out_price)
+        priced = True
+    return round(total, 6) if priced else 0.0
+
+
+def _clamp_score(value):
+    return min(max(float(value), 0.0), 1.0)
+
+
 def pick_suspicious_frames(visual_flagged, temporal_flagged, all_frames, max_count=8):
-    # grab the most suspicious frames from visual + temporal results
-    # and backfill with evenly spaced frames if we dont have enough
-    flagged_times = set()
-    
-    for f in visual_flagged:
-        flagged_times.add(round(f["timestamp"], 3))
-        
-    for t in temporal_flagged:
-        flagged_times.add(round(t, 3))
-        
-    sorted_times = sorted(list(flagged_times))
-    suspicious_frames = []
-    
-    for t in sorted_times:
+    # visual_flagged is sorted most-suspicious first; interleave it with temporal hits so
+    # truncation to max_count keeps the strongest evidence from both agents, then
+    # backfill with evenly spaced frames and return in chronological order
+    by_ts = {round(f["timestamp"], 3): f for f in all_frames}
+
+    def resolve(t):
+        t = round(t, 3)
+        if t in by_ts:
+            return by_ts[t]
         for frame in all_frames:
             if abs(frame["timestamp"] - t) < 0.01:
-                suspicious_frames.append(frame)
-                break
-                
-    # if not enough flagged frames, backfill with evenly spaced frames
+                return frame
+        return None
+
+    visual_ts = [f["timestamp"] for f in visual_flagged]
+    temporal_ts = list(temporal_flagged)
+    prioritized = []
+    for i in range(max(len(visual_ts), len(temporal_ts))):
+        if i < len(visual_ts):
+            prioritized.append(visual_ts[i])
+        if i < len(temporal_ts):
+            prioritized.append(temporal_ts[i])
+
+    suspicious_frames = []
+    existing_ts = set()
+    for t in prioritized:
+        frame = resolve(t)
+        if frame is None:
+            continue
+        ts = round(frame["timestamp"], 3)
+        if ts in existing_ts:
+            continue
+        suspicious_frames.append(frame)
+        existing_ts.add(ts)
+        if len(suspicious_frames) >= max_count:
+            break
+
     if len(suspicious_frames) < max_count and len(all_frames) > 0:
-        existing_ts = {round(f["timestamp"], 3) for f in suspicious_frames}
         step = max(1, len(all_frames) // max_count)
         for i in range(0, len(all_frames), step):
             f = all_frames[i]
@@ -45,7 +111,9 @@ def pick_suspicious_frames(visual_flagged, temporal_flagged, all_frames, max_cou
             if len(suspicious_frames) >= max_count:
                 break
 
-    return suspicious_frames[:max_count]
+    suspicious_frames = suspicious_frames[:max_count]
+    suspicious_frames.sort(key=lambda f: f["timestamp"])
+    return suspicious_frames
 
 
 def run_tools_for_frame(frame_data, all_frames=None, metadata=None):
@@ -99,7 +167,7 @@ def run_tools_for_frame(frame_data, all_frames=None, metadata=None):
     return tool_results, tools_called
 
 
-def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, all_frames=None, api_key=None, audio_details=None):
+def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, all_frames=None, api_key=None, audio_details=None, usage=None):
     # sends frames to Gemini 3.5 Flash-Lite for multi-image analysis and gets back a JSON verdict
     from google import genai
     from google.genai import types
@@ -121,10 +189,10 @@ def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, 
         ts = round(f["timestamp"], 3)
         all_tools_used.update(tools_called)
 
-        # Convert frame to fast 384px width JPEG for instant multi-image ingestion
+        # 640px width keeps fine generation artifacts (text, hands, skin texture) visible; 384px smoothed them away
         rgb = cv2.cvtColor(f["image"], cv2.COLOR_BGR2RGB)
         h, w = rgb.shape[:2]
-        target_w = 384
+        target_w = 640
         target_h = max(1, int(h * (target_w / w)))
         small_rgb = cv2.resize(rgb, (target_w, target_h), interpolation=cv2.INTER_AREA)
         pil_img = Image.fromarray(small_rgb)
@@ -200,8 +268,13 @@ def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, 
             config=gen_config
         )
 
+        meta = getattr(response, "usage_metadata", None)
+        _record_usage(usage, "gemini",
+                      getattr(meta, "prompt_token_count", 0),
+                      (getattr(meta, "candidates_token_count", 0) or 0) + (getattr(meta, "thoughts_token_count", 0) or 0))
+
         data = json.loads(response.text)
-        overall_score = float(data.get("overall_fake_score", 0.1))
+        overall_score = _clamp_score(data.get("overall_fake_score", 0.1))
         summary_reasoning = data.get("summary_reasoning", "Gemini analysis completed.")
         frame_explanations = data.get("frame_explanations", {})
 
@@ -216,7 +289,7 @@ def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, 
         return None
 
 
-def process_single_groq_frame(f, client, all_frames, metadata, reflection_prompt):
+def process_single_groq_frame(f, client, all_frames, metadata, reflection_prompt, usage=None):
     # helper for running one frame through Groq in parallel
     ts = round(f["timestamp"], 3)
     img_array = f["image"]
@@ -250,12 +323,13 @@ def process_single_groq_frame(f, client, all_frames, metadata, reflection_prompt
         "(0.00 is authentic, 1.00 is fully AI-generated/fake). Then, give a 2-sentence explanation."
     )
 
-    score = 0.1
-    explanation = "Analysis completed."
+    # None marks a failed call so it is excluded from the aggregate instead of counted as "authentic"
+    score = None
+    explanation = "Analysis failed for this frame."
 
     try:
         response = client.chat.completions.create(
-            model="meta-llama/llama-4-scout-17b-16e-instruct",
+            model=GROQ_VISION_MODEL,
             messages=[
                 {
                     "role": "user",
@@ -266,23 +340,27 @@ def process_single_groq_frame(f, client, all_frames, metadata, reflection_prompt
                 }
             ],
         )
+        groq_usage = getattr(response, "usage", None)
+        _record_usage(usage, "groq", getattr(groq_usage, "prompt_tokens", 0), getattr(groq_usage, "completion_tokens", 0))
         response_text = response.choices[0].message.content or ""
+        # reasoning models may prepend a <think>...</think> block; keep only the answer
+        response_text = re.sub(r"<think>.*?</think>", "", response_text, flags=re.DOTALL).strip()
         explanation = response_text
 
-        match = re.search(r'\[?SCORE:\s*([0-9.]+)(?:/1\.0)?\]?', response_text, re.IGNORECASE)
+        score_pattern = r'\[?SCORE:\s*(\d*\.?\d+)(?:/1(?:\.0)?)?\]?'
+        match = re.search(score_pattern, response_text, re.IGNORECASE)
         if match:
-            try:
-                score = float(match.group(1))
-                explanation = re.sub(r'\[?SCORE:\s*[0-9.]+(?:/1\.0)?\]?', '', response_text, flags=re.IGNORECASE).strip()
-            except Exception:
-                pass
+            score = _clamp_score(match.group(1))
+            explanation = re.sub(score_pattern, '', response_text, count=1, flags=re.IGNORECASE).strip()
+        else:
+            logger.warning(f"Groq response for frame t={ts}s had no parsable [SCORE]; excluding from aggregate")
     except Exception as err:
         logger.error(f"Groq API error on frame t={ts}s: {err}")
 
     return str(ts), explanation, score, tools_called
 
 
-def analyze_with_groq(suspicious_frames, reflection_prompt="", metadata=None, all_frames=None, api_key=None):
+def analyze_with_groq(suspicious_frames, reflection_prompt="", metadata=None, all_frames=None, api_key=None, usage=None):
     # fallback: sends frames to Groq in parallel threads so we dont wait 10+ seconds sequentially
     from groq import Groq
     client = Groq(api_key=api_key)
@@ -293,28 +371,29 @@ def analyze_with_groq(suspicious_frames, reflection_prompt="", metadata=None, al
     workers = min(len(suspicious_frames), 4)
     with ThreadPoolExecutor(max_workers=workers) as pool:
         results = list(pool.map(
-            lambda f: process_single_groq_frame(f, client, all_frames, metadata, reflection_prompt),
+            lambda f: process_single_groq_frame(f, client, all_frames, metadata, reflection_prompt, usage),
             suspicious_frames
         ))
 
     for ts_str, explanation, score, tools_called in results:
         frame_explanations[ts_str] = explanation
-        scores_list.append(score)
+        if score is not None:
+            scores_list.append(score)
         all_tools_used.update(tools_called)
 
-    if scores_list:
-        sorted_scores = sorted(scores_list, reverse=True)
-        top_scores = sorted_scores[:3]
-        llm_score = sum(top_scores) / len(top_scores)
-    else:
-        llm_score = 0.0
+    if not scores_list:
+        raise RuntimeError(f"Groq API failed on all {len(suspicious_frames)} frames")
+
+    sorted_scores = sorted(scores_list, reverse=True)
+    top_scores = sorted_scores[:3]
+    llm_score = sum(top_scores) / len(top_scores)
 
     tools_used_list = sorted(list(all_tools_used))
     llm_reasoning = f"Groq parallel-analyzed {len(suspicious_frames)} frames (Tools: {', '.join(tools_used_list)}). Top confidence: {round(llm_score, 2)}"
     return llm_reasoning, frame_explanations, round(llm_score, 4), tools_used_list
 
 
-def analyze_with_llm(suspicious_frames, reflection_prompt="", metadata=None, all_frames=None, audio_details=None):
+def analyze_with_llm(suspicious_frames, reflection_prompt="", metadata=None, all_frames=None, audio_details=None, usage=None):
     # main entry point: tries Gemini first, falls back to Groq
     if not suspicious_frames:
         return "No suspicious frames flagged for analysis", {}, 0.0, []
@@ -330,7 +409,8 @@ def analyze_with_llm(suspicious_frames, reflection_prompt="", metadata=None, all
                 metadata=metadata,
                 all_frames=all_frames,
                 api_key=gemini_key,
-                audio_details=audio_details
+                audio_details=audio_details,
+                usage=usage
             )
             if res:
                 return res
@@ -340,15 +420,14 @@ def analyze_with_llm(suspicious_frames, reflection_prompt="", metadata=None, all
     # Fallback to Groq
     groq_key = os.environ.get("GROQ_API_KEY")
     if groq_key:
-        logger.info("Running visual reasoning with Groq Llama 3.2 Vision...")
+        logger.info(f"Running visual reasoning with Groq ({GROQ_VISION_MODEL})...")
         return analyze_with_groq(
             suspicious_frames,
             reflection_prompt=reflection_prompt,
             metadata=metadata,
             all_frames=all_frames,
-            api_key=groq_key
+            api_key=groq_key,
+            usage=usage
         )
 
-    # If neither key is provided
-    frame_explanations = {str(round(f["timestamp"], 3)): "Analysis skipped (no GEMINI_API_KEY or GROQ_API_KEY set)." for f in suspicious_frames}
-    return "LLM analysis skipped because no API key is configured", frame_explanations, 0.0, []
+    raise LLMUnavailableError("LLM analysis skipped because no GEMINI_API_KEY or GROQ_API_KEY is configured")

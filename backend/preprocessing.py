@@ -11,11 +11,73 @@ logger = logging.getLogger(__name__)
 
 
 # real cameras have sensor noise but AI generated frames are usually super clean and smooth
+# normalized 0-1 scale, identical to agents.tools.analyze_noise_pattern so all thresholds agree
 def compute_noise_residual(frame):
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
-    residual = gray.astype(np.float32) - blurred.astype(np.float32)
-    return float(np.var(residual))
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    return float(np.var(gray - blurred))
+
+
+# IPTC digital source types (the vocabulary C2PA uses) that declare media was made by generative AI
+_AI_SOURCE_TYPES = ("trainedalgorithmicmedia", "compositewithtrainedalgorithmicmedia")
+
+
+def read_c2pa(file_path):
+    """
+    reads C2PA Content Credentials embedded in the video, if any. AI tools that support C2PA record a
+    digitalSourceType of "trainedAlgorithmicMedia" when they generate content; edits keep the original
+    manifest as an ingredient, so every manifest in the store is checked, not just the latest one.
+    """
+    result = {
+        "c2pa_present": False,
+        "c2pa_signature_valid": False,
+        "c2pa_trusted_signer": False,
+        "c2pa_ai_generated": False,
+        "c2pa_generator": None,
+        "c2pa_source_types": [],
+    }
+    try:
+        import c2pa  # c2pa-python; optional (needs python >= 3.10)
+    except ImportError:
+        logger.info("c2pa-python not installed; skipping Content Credentials check")
+        return result
+
+    try:
+        reader = c2pa.Reader.try_create(file_path)
+        if reader is None:
+            return result
+        with reader:
+            store = json.loads(reader.json())
+            state = str(reader.get_validation_state() or "")
+    except Exception as e:
+        logger.warning(f"could not read C2PA data: {e}")
+        return result
+
+    manifests = store.get("manifests", {}) or {}
+    active = manifests.get(store.get("active_manifest"), {}) or {}
+    generator = active.get("claim_generator")
+    if not generator and active.get("claim_generator_info"):
+        generator = active["claim_generator_info"][0].get("name")
+
+    source_types = set()
+    for manifest in manifests.values():
+        for assertion in manifest.get("assertions", []) or []:
+            if not str(assertion.get("label", "")).startswith("c2pa.actions"):
+                continue
+            for action in (assertion.get("data", {}) or {}).get("actions", []) or []:
+                if action.get("digitalSourceType"):
+                    source_types.add(action["digitalSourceType"])
+
+    result.update({
+        "c2pa_present": True,
+        # "Valid" = signature and hashes check out; "Trusted" additionally = signer is on a trust list
+        "c2pa_signature_valid": state.lower() in ("valid", "trusted"),
+        "c2pa_trusted_signer": state.lower() == "trusted",
+        "c2pa_ai_generated": any(t.rstrip("/").split("/")[-1].lower() in _AI_SOURCE_TYPES for t in source_types),
+        "c2pa_generator": generator,
+        "c2pa_source_types": sorted(source_types),
+    })
+    return result
 
 
 def check_provenance(file_path):
@@ -44,7 +106,7 @@ def check_provenance(file_path):
     if ffprobe_path:
         try:
             cmd = ["ffprobe", "-v", "quiet", "-show_format", "-show_streams", file_path]
-            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
             output = result.stdout.lower()
 
             # if we find encoder in output, it means metadata is there
@@ -58,16 +120,20 @@ def check_provenance(file_path):
                             encoder = parts[1].strip()
                         break
 
-            # check for c2pa keywords in output
-            if "c2pa" in output or "jumb" in output or "provenance" in output:
-                c2pa_compliant = True
-                provenance_score = 0.98
-                metadata_stripped = False
-
         except Exception as e:
             logger.error(f"Error running ffprobe: {e}")
     else:
         logger.warning("ffprobe not found, skipping container checks")
+
+    # real Content Credentials check (replaces the old keyword search in ffprobe output)
+    c2pa_info = read_c2pa(file_path)
+    if c2pa_info["c2pa_present"]:
+        metadata_stripped = False
+        c2pa_compliant = c2pa_info["c2pa_signature_valid"]
+        if c2pa_info["c2pa_ai_generated"]:
+            provenance_score = 0.02
+        elif c2pa_compliant:
+            provenance_score = 0.98
 
     # if metadata is gone and it is not a camera/social name, it is low trust
     if metadata_stripped:
@@ -80,7 +146,8 @@ def check_provenance(file_path):
         "encoder": encoder,
         "metadata_stripped": metadata_stripped,
         "is_camera_filename": is_camera_filename,
-        "is_social_filename": is_social_filename
+        "is_social_filename": is_social_filename,
+        **c2pa_info
     }
 
 
@@ -167,7 +234,14 @@ def validate_video(file_path):
     meta = get_video_metadata(file_path)
     if meta["duration"] > 30.0:
         raise ValueError(f"video duration is {meta['duration']}s, which exceeds the 30-second limit")
-        
+
+    # decoding very high resolution video needs hundreds of MB, which a 512MB host cannot spare.
+    # the cap is on total pixels (~720p) so portrait and odd-shaped screen recordings are not rejected
+    max_pixels = int(os.environ.get("MAX_VIDEO_PIXELS", "1000000"))
+    w, h = meta.get("width", 0) or 0, meta.get("height", 0) or 0
+    if w * h > max_pixels:
+        raise ValueError(f"video resolution is too high ({w}x{h}); please upload 720p or lower")
+
     return meta
 
 # downscales to 480p so we save bandwidth and processing power.
@@ -212,6 +286,19 @@ def downscale_video(file_path, output_path, target_height=480):
     out.release()
     return output_path
 
+# number of consecutive frames captured after each keyframe for the temporal agent,
+# and the width they are stored at (small, to keep memory low)
+BURST_LENGTH = 8
+BURST_WIDTH = 480
+
+
+def _resize_to_width(frame, width):
+    h, w = frame.shape[:2]
+    if w <= width:
+        return frame
+    return cv2.resize(frame, (width, max(1, int(h * width / w))), interpolation=cv2.INTER_AREA)
+
+
 # pull sample frames using fast sequential grab (avoids slow container seek stalls)
 def extract_frames(file_path, interval=1.0, target_height=480, max_frames=6):
     cap = cv2.VideoCapture(file_path)
@@ -227,40 +314,66 @@ def extract_frames(file_path, interval=1.0, target_height=480, max_frames=6):
     
     # pick 5-6 evenly spaced keyframes across the whole video
     num_samples = min(max_frames, max(4, int(duration / interval)))
-    if total_frames > num_samples and num_samples > 0:
+    if total_frames <= 0:
+        # some containers (often webm) report no frame count; sample by time instead
+        num_samples = max_frames
+        step = max(1, int(round(interval * fps)))
+        target_indices = set(i * step for i in range(num_samples))
+    elif total_frames > num_samples and num_samples > 0:
         step = max(1, total_frames // num_samples)
         target_indices = set(min(i * step, total_frames - 1) for i in range(num_samples))
     else:
         target_indices = set(range(max(1, total_frames)))
+
+    # temporal artifacts (flicker, landmark jitter) only show up between neighbouring frames,
+    # so each keyframe also gets a short burst of the frames right after it (~30fps spacing)
+    burst_stride = max(1, int(round(fps / 30.0)))
+    burst_span = (BURST_LENGTH - 1) * burst_stride
+    active_bursts = {}  # keyframe index -> keyframe dict still collecting burst frames
         
     frames = []
     current_idx = 0
     
-    while cap.isOpened() and len(frames) < num_samples:
+    while cap.isOpened() and (len(frames) < num_samples or active_bursts):
         # cap.grab() is extremely fast (skips decoding non-target frames)
         grabbed = cap.grab()
         if not grabbed:
             break
+
+        is_target = current_idx in target_indices and len(frames) < num_samples
+        burst_owners = [a for a in active_bursts if (current_idx - a) % burst_stride == 0]
             
-        if current_idx in target_indices:
+        if is_target or burst_owners:
             ret, frame = cap.retrieve()
             if ret and frame is not None:
-                h, w = frame.shape[:2]
-                if h > target_height:
-                    aspect = w / h
-                    new_w = int(target_height * aspect)
-                    if new_w % 2 != 0:
-                        new_w += 1
-                    frame = cv2.resize(frame, (new_w, target_height), interpolation=cv2.INTER_AREA)
-                    
-                timestamp = current_idx / fps
-                noise_var = compute_noise_residual(frame)
-                frames.append({
-                    "frame_index": current_idx,
-                    "timestamp": round(timestamp, 3),
-                    "image": frame,
-                    "noise_variance": round(noise_var, 4)
-                })
+                small = _resize_to_width(frame, BURST_WIDTH)
+                for a in burst_owners:
+                    active_bursts[a]["burst"].append(small)
+
+                if is_target:
+                    h, w = frame.shape[:2]
+                    if h > target_height:
+                        aspect = w / h
+                        new_w = int(target_height * aspect)
+                        if new_w % 2 != 0:
+                            new_w += 1
+                        frame = cv2.resize(frame, (new_w, target_height), interpolation=cv2.INTER_AREA)
+
+                    timestamp = current_idx / fps
+                    noise_var = compute_noise_residual(frame)
+                    keyframe = {
+                        "frame_index": current_idx,
+                        "timestamp": round(timestamp, 3),
+                        "image": frame,
+                        "noise_variance": round(noise_var, 8),
+                        "burst": [small]
+                    }
+                    frames.append(keyframe)
+                    active_bursts[current_idx] = keyframe
+
+        # stop collecting for keyframes whose burst is complete
+        for a in [a for a in active_bursts if current_idx - a >= burst_span]:
+            del active_bursts[a]
         current_idx += 1
         
     cap.release()
@@ -287,7 +400,7 @@ def extract_audio(file_path, output_path):
         
     try:
         # hide log spam unless we need it
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60)
         if result.returncode != 0:
             logger.error(f"ffmpeg extraction failed (maybe no audio track present): {result.stderr}")
             return None

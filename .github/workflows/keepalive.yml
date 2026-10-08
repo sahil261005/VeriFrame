@@ -16,6 +16,10 @@ concurrency:
 jobs:
   keep-alive-loop:
     runs-on: ubuntu-latest
+    env:
+      # optional repo variable (Settings > Variables): URL of the hosted generative-video detector Space.
+      # free Spaces sleep after inactivity, so it is pinged in the same loop as the backend.
+      GEN_API_URL: ${{ vars.GEN_API_URL }}
     steps:
       - name: Continuous keep-alive ping (loops for ~5 h 45 min)
         run: |
@@ -60,6 +64,11 @@ jobs:
                 -H "Accept: application/json" \
                 "$URL" 2>/dev/null || echo "000")
               echo "[$TIMESTAMP] Ping #$PING_NUM retry - $RETRY_STATUS"
+            fi
+
+            if [ -n "$GEN_API_URL" ]; then
+              GEN_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 120 "$GEN_API_URL/health" 2>/dev/null || echo "000")
+              echo "[$TIMESTAMP] Generative detector Space - $GEN_STATUS"
             fi
 
             # sleep until next ping (unless loop time is up)

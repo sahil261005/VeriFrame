@@ -3,12 +3,15 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-try:
-    from weasyprint import HTML
-    WEASYPRINT_AVAILABLE = True
-except Exception as err:
-    logger.warning(f"weasyprint could not be imported: {err}. falling back to plain html report.")
-    WEASYPRINT_AVAILABLE = False
+# weasyprint is heavy (cairo/pango); import it only when a PDF is actually requested so it does not
+# sit in memory on a 512MB host for every analysis request
+def _load_weasyprint():
+    try:
+        from weasyprint import HTML
+        return HTML
+    except Exception as err:
+        logger.warning(f"weasyprint could not be imported: {err}. falling back to plain html report.")
+        return None
 
 
 def generate_pdf(report_dict: dict) -> bytes:
@@ -162,6 +165,13 @@ def generate_pdf(report_dict: dict) -> bytes:
             </div>
 
             <div class="agent-card">
+                <div class="agent-name">Generative Video Agent</div>
+                <div>Status: {report_dict.get('agent_breakdown', {}).get('generative_agent', {}).get('status', 'unknown')}</div>
+                <div>AI-Generated Score: {report_dict.get('agent_breakdown', {}).get('generative_agent', {}).get('score', 0.0):.2f}</div>
+                <div>Flagged Frames Count: {report_dict.get('agent_breakdown', {}).get('generative_agent', {}).get('flagged_frames_count', 0)}</div>
+            </div>
+
+            <div class="agent-card">
                 <div class="agent-name">LLM Reasoning Agent</div>
                 <div>Status: {report_dict.get('agent_breakdown', {}).get('llm_agent', {}).get('status', 'unknown')}</div>
                 <div>Average Fake Rating: {report_dict.get('agent_breakdown', {}).get('llm_agent', {}).get('score', 0.0):.2f}</div>
@@ -173,6 +183,8 @@ def generate_pdf(report_dict: dict) -> bytes:
                 <div>Status: {report_dict.get('agent_breakdown', {}).get('provenance_agent', {}).get('status', 'unknown')}</div>
                 <div>Provenance Score: {report_dict.get('agent_breakdown', {}).get('provenance_agent', {}).get('score', 0.5):.2f}</div>
                 <div>C2PA Compliant: {"Yes" if report_dict.get('agent_breakdown', {}).get('provenance_agent', {}).get('c2pa_compliant', False) else "No"}</div>
+                <div>Content Credentials declare AI-generated: {"Yes" if report_dict.get('agent_breakdown', {}).get('provenance_agent', {}).get('c2pa_ai_generated', False) else "No"}</div>
+                <div>C2PA Generator: {report_dict.get('agent_breakdown', {}).get('provenance_agent', {}).get('c2pa_generator') or 'n/a'}</div>
                 <div>Encoder: {report_dict.get('agent_breakdown', {}).get('provenance_agent', {}).get('encoder', 'unknown')}</div>
                 <div>Metadata Stripped: {"Yes" if report_dict.get('agent_breakdown', {}).get('provenance_agent', {}).get('metadata_stripped', True) else "No"}</div>
             </div>
@@ -201,7 +213,8 @@ def generate_pdf(report_dict: dict) -> bytes:
     """
 
     # convert to PDF bytes if weasyprint works, otherwise return HTML text bytes
-    if WEASYPRINT_AVAILABLE:
+    HTML = _load_weasyprint()
+    if HTML is not None:
         try:
             pdf_bytes = HTML(string=html_content).write_pdf()
             return pdf_bytes

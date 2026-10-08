@@ -33,7 +33,6 @@ backend/temp_uploads/
 
 # Scratch & test scripts
 backend/test_groq.py
-README.md
 resume_project_summary.md
 backend/download.py
 
@@ -45,3 +44,10 @@ backend/temp_eval/
 graphify-out/
 .graphify*
 .agents/
+
+# generative-video detector (~200MB, exceeds GitHub file limit): rebuild with export_generative_model.py
+backend/model_gen_onnx/
+
+# evaluation set built by backend/download_benchmark.py (public datasets, re-downloadable)
+backend/benchmark/
+backend/evaluation_scores.csv

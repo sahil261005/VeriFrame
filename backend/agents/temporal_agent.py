@@ -1,6 +1,5 @@
 import cv2
 import numpy as np
-import math
 import logging
 from concurrent.futures import ThreadPoolExecutor
 
@@ -14,23 +13,47 @@ except ImportError:
     MEDIAPIPE_AVAILABLE = False
     logger.warning("mediapipe not installed, face consistency checks will be skipped")
 
+# each keyframe carries a "burst" of consecutive frames (see preprocessing.extract_frames).
+# both checks compare neighbouring frames inside a burst, never keyframes a second apart,
+# so normal scene/head motion over time is not mistaken for an artifact.
 
-def compute_optical_flow(frames):
-    # check how much pixels are moving between frames to find glitches
-    if len(frames) < 2:
-        return []
+FLOW_WIDTH = 240
+SCENE_CUT_CORRELATION = 0.5     # histogram correlation below this = hard cut, not an artifact
+STILL_FLOW = 0.05               # transitions below this are duplicated/static frames
+SPIKE_RATIO = 3.0               # transition moving 3x more than the burst's typical motion
+SPIKE_MIN_MAGNITUDE = 1.0       # ignore spikes that are tiny in absolute terms (pixels at FLOW_WIDTH)
+MIN_TRANSITIONS = 4
 
-    results = []
+# rigid facial points (eye corners, nose bridge/tip, nostrils, forehead) that barely move with expressions
+RIGID_LANDMARKS = [33, 133, 362, 263, 168, 6, 197, 195, 5, 4, 1, 98, 327, 10]
+LEFT_EYE_OUTER, RIGHT_EYE_OUTER = 33, 263
+MIN_EYE_DISTANCE = 20.0         # pixels; smaller faces give landmark noise, not signal
+MIN_FACE_RUN = 5                # consecutive frames with a face needed to measure jitter
+JITTER_THRESHOLD = 0.04         # frame-to-frame shape jitter, as a fraction of eye distance (real-face noise floor measured ~0.01, max 0.025)
 
-    # downscale for fast optical flow calculation
-    h, w = frames[0]["image"].shape[:2]
-    small_w = 240
-    small_h = max(1, int(h * (small_w / w)))
-    
-    prev_gray = cv2.resize(cv2.cvtColor(frames[0]["image"], cv2.COLOR_BGR2GRAY), (small_w, small_h))
 
-    for i in range(1, len(frames)):
-        curr_gray = cv2.resize(cv2.cvtColor(frames[i]["image"], cv2.COLOR_BGR2GRAY), (small_w, small_h))
+def _gray_small(img):
+    h, w = img.shape[:2]
+    small_h = max(1, int(h * (FLOW_WIDTH / w)))
+    return cv2.resize(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), (FLOW_WIDTH, small_h))
+
+
+def _is_scene_cut(a, b):
+    ha = cv2.calcHist([a], [0], None, [64], [0, 256])
+    hb = cv2.calcHist([b], [0], None, [64], [0, 256])
+    return cv2.compareHist(ha, hb, cv2.HISTCMP_CORREL) < SCENE_CUT_CORRELATION
+
+
+def _burst_flow(frame):
+    burst = frame.get("burst") or []
+    if len(burst) < MIN_TRANSITIONS + 1:
+        return None
+
+    grays = [_gray_small(img) for img in burst]
+    magnitudes = []
+    for prev_gray, curr_gray in zip(grays, grays[1:]):
+        if _is_scene_cut(prev_gray, curr_gray):
+            continue
 
         # run farneback to get flow vectors for each pixel
         flow = cv2.calcOpticalFlowFarneback(
@@ -40,138 +63,122 @@ def compute_optical_flow(frames):
             iterations=2, poly_n=5, poly_sigma=1.1,
             flags=0
         )
-
-        # compute flow magnitude
         mag, _ = cv2.cartToPolar(flow[..., 0], flow[..., 1])
-        avg_magnitude = float(np.mean(mag))
+        magnitudes.append(float(np.mean(mag)))
 
-        results.append({
-            "timestamp": frames[i]["timestamp"],
-            "flow_magnitude": round(avg_magnitude, 4),
-            "is_anomalous": False  # flag this later in loop
-        })
+    # duplicated frames (frame-rate conversion) would drag the median to zero and fake spikes
+    moving = [m for m in magnitudes if m > STILL_FLOW]
+    if len(moving) < MIN_TRANSITIONS:
+        return None
 
-        prev_gray = curr_gray
+    typical = float(np.median(moving))
+    peak = max(moving)
+    spike_ratio = peak / typical if typical > 0 else 0.0
 
-    # flag values higher than 2.5 standard deviations from average, with a minimum absolute threshold
-    # to avoid false positives on natural camera pan/tilts where all transitions have low variance
-    if len(results) > 0:
-        magnitudes = [r["flow_magnitude"] for r in results]
-        mean_mag = sum(magnitudes) / len(magnitudes)
+    return {
+        "timestamp": frame["timestamp"],
+        "flow_magnitude": round(peak, 4),
+        "spike_ratio": round(spike_ratio, 2),
+        "is_anomalous": peak > SPIKE_MIN_MAGNITUDE and spike_ratio > SPIKE_RATIO
+    }
 
-        # calculate standard deviation manually
-        squared_diffs = 0
-        for m in magnitudes:
-            squared_diffs += (m - mean_mag) ** 2
-        std_mag = math.sqrt(squared_diffs / len(magnitudes)) if len(magnitudes) > 0 else 0
 
-        # enforce minimum threshold of 8.0 or mean + 2.5 std
-        threshold = max(8.0, mean_mag + (2.5 * std_mag))
-
-        for r in results:
-            if r["flow_magnitude"] > threshold and r["flow_magnitude"] > 6.0:
-                r["is_anomalous"] = True
-
+def compute_optical_flow(frames):
+    # look for sudden motion spikes between consecutive frames (spliced/dropped/glitched frames)
+    results = []
+    for frame in frames:
+        r = _burst_flow(frame)
+        if r is not None:
+            results.append(r)
     return results
 
 
+def _similarity_align(src, dst):
+    # least-squares rotation + uniform scale + translation mapping src points onto dst (umeyama)
+    mu_s, mu_d = src.mean(axis=0), dst.mean(axis=0)
+    s, d = src - mu_s, dst - mu_d
+    var_s = (s ** 2).sum() / len(src)
+    if var_s == 0:
+        return src
+    cov = d.T @ s / len(src)
+    u, sig, vt = np.linalg.svd(cov)
+    sign = np.ones(2)
+    if np.linalg.det(u) * np.linalg.det(vt) < 0:
+        sign[-1] = -1
+    rot = u @ np.diag(sign) @ vt
+    scale = (sig * sign).sum() / var_s
+    return (scale * (rot @ s.T)).T + mu_d
+
+
+def _burst_jitter(face_mesh, frame):
+    burst = frame.get("burst") or []
+    shapes = []
+    eye_dists = []
+    for img in burst:
+        h, w = img.shape[:2]
+        result = face_mesh.process(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+        if not result.multi_face_landmarks:
+            shapes.append(None)
+            continue
+        lm = result.multi_face_landmarks[0].landmark
+        pts = np.array([(lm[i].x * w, lm[i].y * h) for i in RIGID_LANDMARKS], dtype=np.float64)
+        shapes.append(pts)
+        eye_dists.append(np.hypot(lm[LEFT_EYE_OUTER].x * w - lm[RIGHT_EYE_OUTER].x * w,
+                                  lm[LEFT_EYE_OUTER].y * h - lm[RIGHT_EYE_OUTER].y * h))
+
+    # longest run of consecutive frames with a face
+    best, run = [], []
+    for pts in shapes:
+        if pts is None:
+            run = []
+            continue
+        run.append(pts)
+        if len(run) > len(best):
+            best = list(run)
+
+    if len(best) < MIN_FACE_RUN or not eye_dists:
+        return None
+    eye_dist = float(np.median(eye_dists))
+    if eye_dist < MIN_EYE_DISTANCE:
+        return None
+
+    # remove head translation/rotation/zoom so only the face shape itself is compared
+    aligned = [best[0]] + [_similarity_align(p, best[0]) for p in best[1:]]
+
+    # second difference: smooth motion (even a steady head turn) cancels out, frame-to-frame jitter does not
+    jitters = []
+    for a, b, c in zip(aligned, aligned[1:], aligned[2:]):
+        jitters.append(float(np.mean(np.linalg.norm(a - 2 * b + c, axis=1))) / eye_dist)
+    jitter = float(np.median(jitters))
+
+    return {
+        "timestamp": frame["timestamp"],
+        "landmark_shift": round(jitter, 4),
+        "is_inconsistent": jitter > JITTER_THRESHOLD
+    }
+
+
 def check_face_consistency(frames):
-    # track facial landmarks over time.
-    # if landmarks jump around too much, it means the face mesh is glitching
+    # track rigid facial landmarks across consecutive frames.
+    # a real face moves smoothly; face-swaps tend to make the landmarks jitter frame to frame
     if not MEDIAPIPE_AVAILABLE:
         logger.info("skipping face consistency (mediapipe not available)")
         return []
 
-    if len(frames) < 2:
-        return []
-
-    # initialize face mesh once for the entire sequence
+    # static mode: every frame is measured independently, so tracking does not smooth jitter away
     face_mesh = mp.solutions.face_mesh.FaceMesh(
         static_image_mode=True,
         max_num_faces=1,
         min_detection_confidence=0.5
     )
-
-    # key landmarks: 1=nose, 33=left eye, 263=right eye, 152=chin
-    key_points = [1, 33, 263, 152]
-
-    # get landmarks for all frames first
-    frame_landmarks = []
+    results = []
     try:
-        for frame_data in frames:
-            img = frame_data["image"]
-            h, w = img.shape[:2]
-            small_w = 240
-            small_h = max(1, int(h * (small_w / w)))
-            small_img = cv2.resize(img, (small_w, small_h))
-            img_rgb = cv2.cvtColor(small_img, cv2.COLOR_BGR2RGB)
-            
-            result = face_mesh.process(img_rgb)
-
-            if result.multi_face_landmarks and len(result.multi_face_landmarks) > 0:
-                landmarks = result.multi_face_landmarks[0]
-                points = {}
-                for idx in key_points:
-                    lm = landmarks.landmark[idx]
-                    # convert normalized scale to pixels
-                    points[idx] = (lm.x * w, lm.y * h)
-
-                frame_landmarks.append({
-                    "timestamp": frame_data["timestamp"],
-                    "points": points,
-                    "face_found": True
-                })
-            else:
-                frame_landmarks.append({
-                    "timestamp": frame_data["timestamp"],
-                    "points": {},
-                    "face_found": False
-                })
+        for frame in frames:
+            r = _burst_jitter(face_mesh, frame)
+            if r is not None:
+                results.append(r)
     finally:
         face_mesh.close()
-
-    # count how many frames had a face
-    faces_found = 0
-    for fl in frame_landmarks:
-        if fl["face_found"]:
-            faces_found += 1
-
-    if faces_found < 2:
-        logger.info(f"only found faces in {faces_found} frames, not enough for consistency check")
-        return []
-
-    # compare face landmarks between consecutive frames
-    results = []
-    # compare adjacent frames
-    for i in range(1, len(frame_landmarks)):
-        prev = frame_landmarks[i - 1]
-        curr = frame_landmarks[i]
-
-        if not prev["face_found"] or not curr["face_found"]:
-            continue
-
-        # get total movement of landmarks
-        total_shift = 0
-        num_points = 0
-        for idx in key_points:
-            if idx in prev["points"] and idx in curr["points"]:
-                px, py = prev["points"][idx]
-                cx, cy = curr["points"][idx]
-                dist = math.sqrt((cx - px) ** 2 + (cy - py) ** 2)
-                total_shift += dist
-                num_points += 1
-
-        avg_shift = total_shift / num_points if num_points > 0 else 0
-
-        # flag if landmark movement is more than 15 pixels (means face shifted too fast)
-        is_inconsistent = avg_shift > 15.0
-
-        results.append({
-            "timestamp": curr["timestamp"],
-            "landmark_shift": round(avg_shift, 2),
-            "is_inconsistent": is_inconsistent
-        })
-
     return results
 
 
@@ -183,20 +190,18 @@ def run_temporal_analysis(frames):
         flow_results = future_flow.result()
         face_results = future_face.result()
 
-    # combine timestamps flagged by either test
-    flagged_timestamps = []
+    # per keyframe burst: face jitter is face-swap specific (full weight); a lone motion spike can
+    # also be an edit or a jump cut, so it counts half
+    burst_scores = {}
     for r in flow_results:
-        if r["is_anomalous"]:
-            flagged_timestamps.append(r["timestamp"])
-
+        burst_scores[r["timestamp"]] = 0.5 if r["is_anomalous"] else 0.0
     for r in face_results:
         if r["is_inconsistent"]:
-            if r["timestamp"] not in flagged_timestamps:
-                flagged_timestamps.append(r["timestamp"])
+            burst_scores[r["timestamp"]] = 1.0
+        else:
+            burst_scores.setdefault(r["timestamp"], 0.0)
 
-    # score is fraction of flagged transitions
-    total_transitions = max(len(flow_results), 1)
-    temporal_score = len(flagged_timestamps) / total_transitions
+    flagged_timestamps = sorted(t for t, v in burst_scores.items() if v > 0)
+    temporal_score = sum(burst_scores.values()) / len(burst_scores) if burst_scores else 0.0
 
     return round(temporal_score, 4), flagged_timestamps, flow_results, face_results
-

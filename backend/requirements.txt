@@ -19,3 +19,6 @@ weasyprint==66.0
 slowapi==0.1.10
 email-validator==2.2.0
 dnspython==2.6.1
+httpx>=0.27
+# reads C2PA Content Credentials; wheels need python >= 3.10, skipped (check disabled) on older versions
+c2pa-python>=0.38; python_version >= "3.10"

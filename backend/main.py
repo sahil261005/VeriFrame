@@ -5,9 +5,17 @@ import json
 from datetime import datetime
 from typing import List
 import logging
+import time
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# LangSmith tracing is disabled for good: LangGraph would otherwise copy and upload every node's state
+# (including all decoded video frames) on each step, which tripled memory use and sends user videos to a third party
+for _var in ("LANGCHAIN_TRACING_V2", "LANGCHAIN_TRACING", "LANGSMITH_TRACING"):
+    os.environ[_var] = "false"
+for _var in ("LANGCHAIN_API_KEY", "LANGSMITH_API_KEY"):
+    os.environ.pop(_var, None)
 
 # Configure simple logging for the application
 logging.basicConfig(
@@ -18,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import Response, StreamingResponse, JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from slowapi import Limiter
@@ -45,9 +53,10 @@ app.state.limiter = limiter
 
 @app.exception_handler(RateLimitExceeded)
 def rate_limit_handler(request: Request, exc: RateLimitExceeded):
-    raise HTTPException(
+    # raising inside an exception handler surfaces as a 500, so return the 429 directly
+    return JSONResponse(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-        detail="Rate limit exceeded. You can only scan up to 5 videos per minute."
+        content={"detail": "Rate limit exceeded. You can only scan up to 5 videos per minute."}
     )
 
 
@@ -63,12 +72,16 @@ app.add_middleware(
 
 import threading
 import agents.visual_agent as visual_agent
+import agents.generative_agent as generative_agent
+import agents.remote_detector as remote_detector
 
 
 @app.on_event("startup")
 def startup_event():
     """pre-load the ONNX deepfake detection model into memory on server boot"""
     threading.Thread(target=visual_agent.load_model, daemon=True).start()
+    # wake the hosted generative-video detector (free Hugging Face Spaces sleep when idle)
+    threading.Thread(target=remote_detector.warm_up, daemon=True).start()
 
 
 @app.get("/health")
@@ -137,14 +150,26 @@ def swagger_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session 
     return {"access_token": access_token, "token_type": "bearer"}
 
 
+# a 512MB host cannot hold several decoded videos plus the CV models at once, so analyses run one at a time
+# (extra uploads wait here with status "processing" instead of crashing the server)
+_analysis_slot = threading.Semaphore(int(os.environ.get("MAX_CONCURRENT_ANALYSES", "1")))
+
+
 # worker function to run the deepfake analysis in the background
 def process_video_task(job_id: str, temp_path: str, meta: dict):
+    with _analysis_slot:
+        _process_video(job_id, temp_path, meta)
+
+
+def _process_video(job_id: str, temp_path: str, meta: dict):
     db = database.SessionLocal()
     try:
         logger.info(f"background processing started for job {job_id}...")
         
         # 1. grab sample keyframes from the video and resize them in memory
+        job_start = time.perf_counter()
         frames = preprocessing.extract_frames(temp_path, interval=1.0, target_height=480, max_frames=6)
+        extract_seconds = round(time.perf_counter() - job_start, 3)
         logger.info(f"extracted {len(frames)} keyframes for job {job_id}.")
         
         # 2. run langgraph multi-agent pipeline with video path for audio forensics
@@ -191,7 +216,11 @@ def process_video_task(job_id: str, temp_path: str, meta: dict):
         job.confidence = pipeline_output.get("final_confidence", 0.0)
         job.is_partial_analysis = any(status == "failed" for status in pipeline_output.get("agent_status", {}).values())
         
-        job.report_json = json.dumps(pipeline_output.get("report", {}))
+        report = pipeline_output.get("report", {})
+        if isinstance(report.get("performance"), dict):
+            report["performance"]["extract_seconds"] = extract_seconds
+            report["performance"]["total_seconds"] = round(time.perf_counter() - job_start, 3)
+        job.report_json = json.dumps(report)
         job.flagged_frame_thumbnails = json.dumps(thumbnails_list)
         
         db.commit()
@@ -294,6 +323,11 @@ async def stream_job_events(job_id: str):
     async def event_generator():
         last_index = 0
         while True:
+            if not event_bus.has_job(job_id):
+                # unknown job (e.g. server restarted): close instead of streaming forever; client falls back to polling
+                yield f"data: {json.dumps({'agent': 'System', 'message': 'Live event stream unavailable for this job.'})}\n\n"
+                break
+
             new_events, is_done, status = event_bus.get_events(job_id, after_index=last_index)
             
             for event in new_events:

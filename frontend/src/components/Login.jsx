@@ -63,7 +63,7 @@ function Login() {
             <span className="auth-feature-icon">3</span>
             <div className="auth-feature-text">
               <div className="auth-feature-title">Cognitive Reasoning Agent</div>
-              Llama 4 Scout evaluates flagged frames, explaining precisely why a sample is suspect.
+              A vision LLM (Gemini) evaluates flagged frames, explaining precisely why a sample is suspect.
             </div>
           </div>
         </div>

@@ -11,13 +11,31 @@ logger = logging.getLogger(__name__)
 _lock = threading.Lock()
 _events = {}   # job_id -> list of event dicts
 _status = {}   # job_id -> "running" | "completed" | "failed"
+_finished_at = {}  # job_id -> time.time() when the job reached a terminal state
+
+# finished jobs are kept briefly so late or reconnecting SSE clients still get the final event
+_RETENTION_SECONDS = 3600
+
+
+def _prune_finished_locked():
+    cutoff = time.time() - _RETENTION_SECONDS
+    for job_id in [j for j, t in _finished_at.items() if t < cutoff]:
+        _events.pop(job_id, None)
+        _status.pop(job_id, None)
+        _finished_at.pop(job_id, None)
 
 
 def init_job(job_id):
     """initialize event storage for a new job"""
     with _lock:
+        _prune_finished_locked()
         _events[job_id] = []
         _status[job_id] = "running"
+
+
+def has_job(job_id):
+    with _lock:
+        return job_id in _status
 
 
 def publish_event(job_id, agent_name, message):
@@ -40,12 +58,14 @@ def mark_completed(job_id):
     """mark the job as done so the SSE endpoint knows to stop streaming"""
     with _lock:
         _status[job_id] = "completed"
+        _finished_at[job_id] = time.time()
 
 
 def mark_failed(job_id):
     """mark the job as failed"""
     with _lock:
         _status[job_id] = "failed"
+        _finished_at[job_id] = time.time()
 
 
 def get_events(job_id, after_index=0):
@@ -67,3 +87,4 @@ def cleanup_job(job_id):
     with _lock:
         _events.pop(job_id, None)
         _status.pop(job_id, None)
+        _finished_at.pop(job_id, None)
