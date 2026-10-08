@@ -145,7 +145,7 @@ function Upload({ onUploadSuccess }) {
               <div style={{ fontSize: '15px' }}>
                 <strong>Choose a video</strong> <span className="muted">or drop it here</span>
               </div>
-              <div className="muted" style={{ fontSize: '13px', marginTop: '6px' }}>Up to 30 seconds and about 720p</div>
+              <div className="muted" style={{ fontSize: '13px', marginTop: '6px' }}>Up to 30 seconds and 1080p</div>
             </div>
           )}
 

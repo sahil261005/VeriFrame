@@ -1,3 +1,5 @@
+import ctypes
+import gc
 import os
 import subprocess
 import shutil
@@ -12,6 +14,25 @@ import config
 cv2.setNumThreads(config.CPU_THREADS)  # OpenCV's own pool also defaults to every visible core
 
 logger = logging.getLogger(__name__)
+
+
+def open_video(file_path):
+    # OpenCV's FFmpeg decoder starts one thread per visible CPU core, each holding its own frame buffers. A shared
+    # host shows the container every core, so decode on a single thread (measured: 1080p +118 MB -> +48 MB)
+    cap = cv2.VideoCapture(file_path, cv2.CAP_FFMPEG, [cv2.CAP_PROP_N_THREADS, 1])
+    if not cap.isOpened():
+        cap = cv2.VideoCapture(file_path)
+    return cap
+
+
+def release_memory():
+    # freed memory otherwise stays with the process, so each analysis would start from a higher baseline.
+    # malloc_trim hands it back to the OS (glibc only, i.e. Linux; a no-op elsewhere)
+    gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        pass
 
 
 # real cameras have sensor noise but AI generated frames are usually super clean and smooth
@@ -157,7 +178,7 @@ def check_provenance(file_path):
 
 # get basic metadata from opencv. we need this to validate and show on frontend later
 def get_video_metadata(file_path):
-    cap = cv2.VideoCapture(file_path)
+    cap = open_video(file_path)
     if not cap.isOpened():
         raise ValueError("could not open video file to read metadata")
     
@@ -239,75 +260,15 @@ def validate_video(file_path):
     if meta["duration"] > 30.0:
         raise ValueError(f"video duration is {meta['duration']}s, which exceeds the 30-second limit")
 
-    # big videos are accepted and shrunk to 480p before analysis (see downscale_for_analysis), because decoding
-    # full-size frames all at once needs hundreds of MB. the hard ceiling only stops absurd inputs (8K and up).
-    max_input_pixels = int(os.environ.get("MAX_INPUT_PIXELS", "9000000"))
-    max_pixels = int(os.environ.get("MAX_VIDEO_PIXELS", "1000000"))
+    # frames are decoded one at a time and shrunk to 480p as they arrive, so the cost is the decoder itself.
+    # measured with a single decoder thread: 720p +25 MB, 1080p +48 MB, 4K +167 MB. 4K does not fit a 512MB host.
+    # the cap is on total pixels (~1080p) so portrait and odd-shaped screen recordings are not rejected
+    max_pixels = int(os.environ.get("MAX_VIDEO_PIXELS", "2100000"))
     w, h = meta.get("width", 0) or 0, meta.get("height", 0) or 0
-    if w * h > max_input_pixels:
-        raise ValueError(f"video resolution is too high ({w}x{h}); please upload 4K or lower")
-    meta["needs_downscale"] = w * h > max_pixels
+    if w * h > max_pixels:
+        raise ValueError(f"video resolution is too high ({w}x{h}); please upload 1080p or lower")
 
     return meta
-
-# downscales to 480p so we save bandwidth and processing power.
-# keeps aspect ratio same
-def downscale_video(file_path, output_path, target_height=480):
-    cap = cv2.VideoCapture(file_path)
-    if not cap.isOpened():
-        raise ValueError("could not open video to downscale")
-        
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    
-    # dont upscale it if its already smaller than 480p
-    if height <= target_height:
-        # write with original size
-        new_height = height
-        new_width = width
-    else:
-        # compute width based on height
-        aspect = width / height
-        new_height = target_height
-        new_width = int(target_height * aspect)
-        
-        # make sure width is even or encoders will crash
-        if new_width % 2 != 0:
-            new_width += 1
-            
-    # mp4v works everywhere so we use it
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(output_path, fourcc, fps, (new_width, new_height))
-    
-    # loop frames, resize them, and write
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        resized = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
-        out.write(resized)
-        
-    cap.release()
-    out.release()
-    return output_path
-
-
-# shrinks a large upload to 480p for the visual/temporal/LLM agents. video only: audio forensics still reads the
-# original file. uses ffmpeg when installed (fast, low memory) and otherwise the frame-by-frame opencv path above,
-# which holds a single frame in memory at a time.
-def downscale_for_analysis(file_path, output_path, target_height=480, timeout=180):
-    if shutil.which("ffmpeg"):
-        cmd = ["ffmpeg", "-y", "-i", file_path, "-an", "-vf", f"scale=-2:{target_height}",
-               "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26", "-threads", "2", output_path]
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-            if result.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-                return output_path
-            logger.warning("ffmpeg downscale failed, falling back to opencv: %s", result.stderr[-300:])
-        except Exception as e:
-            logger.warning("ffmpeg downscale errored, falling back to opencv: %s", e)
-    return downscale_video(file_path, output_path, target_height=target_height)
 
 # number of consecutive frames captured after each keyframe for the temporal agent,
 # and the width they are stored at (small, to keep memory low)
@@ -324,7 +285,7 @@ def _resize_to_width(frame, width):
 
 # pull sample frames using fast sequential grab (avoids slow container seek stalls)
 def extract_frames(file_path, interval=1.0, target_height=480, max_frames=6):
-    cap = cv2.VideoCapture(file_path)
+    cap = open_video(file_path)
     if not cap.isOpened():
         raise ValueError("could not open video to extract frames")
         

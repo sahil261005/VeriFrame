@@ -80,6 +80,9 @@ def _load_model_locked():
             # prepacking duplicates the weights in memory (+~150MB, no speed gain here); matters on a 512MB host
             opts = ort.SessionOptions()
             opts.add_session_config_entry("session.disable_prepacking", "1")
+            # the CPU arena keeps every buffer it ever allocated; without it inference memory is returned (-55 MB)
+            opts.enable_cpu_mem_arena = False
+            opts.enable_mem_pattern = False
             # frames already run in parallel (analyze_video), so each run gets its share of the allowed CPUs
             opts.intra_op_num_threads = max(1, config.CPU_THREADS // min(6, config.CPU_THREADS))
             opts.inter_op_num_threads = 1

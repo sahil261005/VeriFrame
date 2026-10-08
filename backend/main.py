@@ -89,9 +89,28 @@ import agents.generative_agent as generative_agent
 import agents.remote_detector as remote_detector
 
 
+def _fail_orphaned_jobs():
+    """jobs still "processing" at boot belonged to a previous process (e.g. one killed for running out of memory).
+    nothing will ever finish them, so mark them failed and the page shows an error instead of waiting forever"""
+    db = database.SessionLocal()
+    try:
+        orphans = db.query(models.AnalysisJob).filter(models.AnalysisJob.status == "processing").all()
+        for job in orphans:
+            job.status = "failed"
+            job.completed_at = datetime.utcnow()
+        db.commit()
+        if orphans:
+            logger.warning(f"marked {len(orphans)} interrupted job(s) as failed after restart")
+    except Exception as e:
+        logger.error(f"could not clean up interrupted jobs: {e}")
+    finally:
+        db.close()
+
+
 @app.on_event("startup")
 def startup_event():
     """pre-load the ONNX deepfake detection model into memory on server boot"""
+    _fail_orphaned_jobs()
     threading.Thread(target=visual_agent.load_model, daemon=True).start()
     # wake the hosted generative-video detector (free Hugging Face Spaces sleep when idle)
     threading.Thread(target=remote_detector.warm_up, daemon=True).start()
@@ -196,14 +215,8 @@ def _process_video(job_id: str, temp_path: str, meta: dict):
         
         # 1. grab sample keyframes from the video and resize them in memory
         job_start = time.perf_counter()
-        frame_source = temp_path
-        if meta.get("needs_downscale"):
-            # oversized upload: shrink to 480p first so full-size frames are never held in memory.
-            # the original stays on disk for audio forensics.
-            small_path = temp_path + ".small.mp4"
-            frame_source = preprocessing.downscale_for_analysis(temp_path, small_path)
-            logger.info(f"downscaled {meta.get('width')}x{meta.get('height')} upload for job {job_id}.")
-        frames = preprocessing.extract_frames(frame_source, interval=1.0, target_height=480, max_frames=6)
+        frames = preprocessing.extract_frames(temp_path, interval=1.0, target_height=480, max_frames=6)
+        preprocessing.release_memory()  # hand the decoder's buffers back before the models and LLM run
         extract_seconds = round(time.perf_counter() - job_start, 3)
         logger.info(f"extracted {len(frames)} keyframes for job {job_id}.")
         
@@ -282,13 +295,13 @@ def _process_video(job_id: str, temp_path: str, meta: dict):
             
     finally:
         db.close()
-        # clean up the uploaded temp file and its downscaled copy
-        for path in (temp_path, temp_path + ".small.mp4"):
-            if os.path.exists(path):
-                try:
-                    os.remove(path)
-                except Exception as e:
-                    logger.error(f"error removing temp video {path}: {e}")
+        # clean up the uploaded temp file
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception as e:
+                logger.error(f"error removing temp video {temp_path}: {e}")
+        preprocessing.release_memory()
 
 
 @app.post("/upload", response_model=schemas.JobStatusResponse)

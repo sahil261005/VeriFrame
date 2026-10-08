@@ -7,7 +7,7 @@ VeriFrame is an explainable multi-agent system that decides whether a video is a
 ### In plain words
 Think of it as a **panel of experts** looking at the same video:
 
-1. You upload a video (up to 30 s, about 720p).
+1. You upload a video (up to 30 s and 1080p).
 2. The app pulls out 6 key frames plus a few frames right after each one.
 3. Several experts examine them **at the same time**:
    - one checks faces for swaps;
@@ -18,7 +18,7 @@ Think of it as a **panel of experts** looking at the same video:
 5. A **reviewer** checks that the AI's explanation matches its score, and asks again if they contradict.
 6. A **moderator** (the consensus engine) weighs everyone's opinion. It ignores any expert that couldn't do its job, then answers **AUTHENTIC**, **MANIPULATED** or **UNCERTAIN**, with a reason for each frame.
 
-On a 50-video test set it was right 88% of the time and wrongly flagged only 1 of 25 real videos. A typical answer takes about 3.4 seconds.
+On a 50-video test set it was right 88% of the time and wrongly flagged only 1 of 25 real videos. A typical answer takes about 3.4 seconds on a laptop; on Render's free tier it is slower because of the shared CPU (see [Production Safeguards](#production-safeguards-for-a-512-mb-host)).
 
 ---
 
@@ -28,7 +28,8 @@ On a 50-video test set it was right 88% of the time and wrongly flagged only 1 o
 *   **Explainable output.** Every verdict comes with per-frame, human-readable reasoning and a per-agent score breakdown, streamed live to the UI over Server-Sent Events.
 *   **Graceful degradation.** If an agent fails or is skipped (no audio track, no face in the video, API down), its weight is redistributed to the others. If no agent produced evidence, the answer is `UNCERTAIN`, never a false "authentic".
 *   **Measured, reproducible evaluation.** A 50-video benchmark built from public datasets, with a script that rebuilds the set and prints accuracy, per-generator detection rate, latency and token usage (see [Evaluation](#evaluation)).
-*   **Built for free tiers.** Memory was profiled and tuned (duplicate model weights removed, tracing that copied every frame removed, one analysis at a time, upload caps). Peak usage on a 480p job was about 565 MB on a Mac, so Render's 512 MB limit is tight and not yet verified in production.
+*   **Built for free tiers.** Memory was profiled and tuned (duplicate model weights removed, tracing that copied every frame removed, one analysis at a time, upload caps). Peak usage on a 480p job was about 565 MB on a Mac, so Render's 512 MB limit is tight and not yet verified in production. CPU use is capped to what the host actually gives the container (see [Production Safeguards](#production-safeguards-for-a-512-mb-host)).
+*   **A report-style interface.** A light, paper-and-ink design. The score bars carry the real consensus cut-offs (0.30 and 0.48), the live screen shows each pipeline stage as it runs, and the report opens automatically when the analysis finishes.
 
 ---
 
@@ -47,10 +48,10 @@ On a 50-video test set it was right 88% of the time and wrongly flagged only 1 o
         *   A forced Gemini failure (an invalid key) switched to Groq.
         *   Groq returned a scored explanation in about 1.6 s, using about 1,400 input tokens per frame.
 *   **Provenance:** `c2pa-python` (reads signed C2PA Content Credentials).
-*   **Reports and safety:** WeasyPrint (PDF, loaded lazily), `slowapi` rate limiting, bcrypt and JWT authentication.
+*   **Reports and safety:** WeasyPrint (PDF, loaded lazily), `slowapi` rate limiting (login, register, upload), a cap on queued analyses, bcrypt and JWT authentication. Details in [Production Safeguards](#production-safeguards-for-a-512-mb-host).
 
 ### Frontend
-*   React with Vite, Axios (JWT interceptors), EventSource for live progress, custom CSS.
+*   React with Vite, Axios (JWT interceptors), EventSource for live progress, hand-written CSS with design tokens (Archivo and IBM Plex fonts, light theme).
 
 ### Hosting
 | Part | Where | Notes |
@@ -84,9 +85,15 @@ backend/
 ├── evaluate_pipeline.py      # Benchmark runner (accuracy, per-group rates, latency, cost)
 ├── download_benchmark.py     # Builds the 50-video public benchmark
 ├── export_generative_model.py# Optional: builds a local ONNX copy of the Swin detector
-├── report.py, auth.py, models.py, schemas.py, database.py, config.py
+├── report.py, auth.py, models.py, schemas.py, database.py
+├── config.py                 # Env settings, JWT secret handling, CPU thread cap read from the container's cgroup quota
 ├── model_onnx/               # INT8 face-swap ViT (83 MB)
-frontend/src/components/      # Upload, StatusFeed, ResultsDashboard, AgentBreakdown, FrameGallery, ...
+frontend/src/components/
+├── AuthLayout, Login, Register   # Landing page: pitch with an example report + the sign-in form
+├── Upload                        # Intake page: list of checks + drop zone
+├── StatusFeed                    # Live screen: progress bar per stage, agent graph, event stream, auto-opens the report
+├── ResultsDashboard              # Verdict, score vs thresholds, time per stage
+├── AgentBreakdown, ThresholdMeter, FrameGallery   # Per-agent evidence, score bars, frames with LLM notes
 ```
 
 ---
@@ -236,7 +243,7 @@ What this means:
 *   **Small sample.** Fifty videos means roughly plus or minus 10 percentage points of uncertainty. Treat the numbers as an internal benchmark, not general accuracy.
 *   **Labels come from the datasets.** OpenVid-1M is scraped web footage, so a few "real" HD clips could be rendered or heavily processed.
 *   **No face-swap videos in this benchmark.** Face-swap detection (Celeb-DF, FaceForensics++ style data) was not evaluated.
-*   **Upload cap.** The evaluation script does not apply the web app's upload limit (about 720p by default), so the 1080p real clips and 1440x1440 Kling clips were scored here but would be rejected by the app unless `MAX_VIDEO_PIXELS` is raised.
+*   **Upload cap.** The evaluation script does not apply the web app's upload limit (about 1080p, 2.1 million pixels). The 1080p real clips fit it, but the 1440x1440 Kling clips (2.07 million pixels) are right at the edge, and anything larger would be rejected by the app.
 *   **Latency conditions.** Measured on a laptop (the first run also had the optional detector running locally on 2 CPU threads); deployed numbers on Render's free CPU will differ.
 *   **Provider mix not recorded.** The CSV records LLM calls and tokens but not whether Gemini or Groq answered. Gemini is the primary provider, so most verdicts come from it.
 *   **C2PA depends on intact files.** Only some generators embed credentials, and re-encoding or social-media upload removes them. The Sora 2 and Veo 3 clips here were direct downloads with credentials intact, which flatters the overall numbers.
@@ -261,6 +268,9 @@ What this means:
 | Slow detector blocked the LLM | CV stage 1.1 s vs 0.35 s | Run in background, join at synthesis |
 
 ### Bugs fixed along the way
+*   **Live agent steps never appeared in the UI.** LangGraph drops any state key that is not declared in the state type, and `job_id` was not declared, so every agent's progress event was silently thrown away and only "Job completed" arrived. Declaring it fixed the live stream.
+*   The LLM's frame notes did not line up with the frames shown: Gemini sometimes returned keys like `1.333s` instead of `1.333`, and the gallery showed frames the LLM never saw. Keys are now normalised, and the gallery uses the exact timestamps that were sent to the LLM.
+*   On Render the analysis took 49.5 s because of CPU thread oversubscription (see Production Safeguards).
 *   Rate-limit handler returned HTTP 500 instead of 429.
 *   Live-progress stream looped forever for unknown jobs; finished jobs' events are now pruned.
 *   A failed or missing LLM was scored as "authentic"; it is now excluded or marked skipped.
@@ -275,9 +285,24 @@ What this means:
 ## Production Safeguards for a 512 MB Host
 
 *   **One analysis at a time** (`MAX_CONCURRENT_ANALYSES`, default 1); extra uploads wait with status "processing".
-*   **Resolution cap** about 720p (`MAX_VIDEO_PIXELS`, default 1,000,000) and a 30-second duration limit, because decoding large video needs hundreds of MB.
+*   **Resolution cap** about 1080p (`MAX_VIDEO_PIXELS`, default 2,100,000) and a 30-second duration limit. Frames are decoded one at a time and shrunk to 480p as they arrive, so the cost is the decoder itself: measured at 720p +25 MB, 1080p +48 MB and 4K +167 MB. 4K does not fit, so it is rejected with a clear message.
 *   **Memory fixes found by profiling:** ONNX weight pre-packing disabled (259 MB down to 108 MB for the same model), tracing removed (it copied every frame), PDF library imported lazily.
-*   **Measured on macOS, not on Render:** about 400 MB idle with the face-swap model loaded and about 565 MB peak for a 480p job, which is above 512 MB. Linux often uses less, but this is unverified; if the host runs out of memory, lower `MAX_VIDEO_PIXELS`, move to a larger instance, or host the face-swap model off-box behind `GEN_API_URL`. Setting `MALLOC_ARENA_MAX=2` usually helps on Linux.
+*   **Out-of-memory crashes fixed (measured per pipeline step with a memory sampler):**
+    *   *An in-container re-encode was removed.* A change that accepted uploads up to 4K and re-encoded them to 480p with ffmpeg ran ffmpeg inside the same 512 MB container, adding 164 MB for 1080p and 487 MB for 4K on top of the server. That change caused the crashes.
+    *   *Decoder threads.* OpenCV's FFmpeg decoder started one thread per visible core, each with its own frame buffers (the same problem as the CPU cap below). Decoding on one thread cut decode memory by 55-60% (1080p: 118 MB down to 48 MB).
+    *   *ONNX Runtime arena disabled.* The arena keeps every buffer it ever allocated; without it, 55 MB less after inference, with identical outputs.
+    *   *Memory handed back after each step.* Freed memory used to stay with the process, so every analysis started from a higher baseline. The server now calls `gc.collect()` and glibc's `malloc_trim` after frame extraction and after each job.
+    *   *Result on macOS:* peak for a 720p job went from 558 MB to 457 MB, and for a 1080p job from 707 MB to 490 MB (idle about 340 MB). Linux usually reports somewhat less. Render's Metrics tab shows the real number; `MALLOC_ARENA_MAX=2` also helps there.
+*   **Interrupted jobs.** If the server restarts mid-analysis (for example after running out of memory), any job still marked "processing" is marked failed at startup, so the page shows an error instead of waiting forever.
+*   **CPU thread cap.** Render's free tier gives a fraction of a CPU but shows the container all of the host's cores. ONNX Runtime and OpenCV each started one thread per visible core, so the threads fought over a tiny share and the CV stage took 38.7 s (about 100x slower than the 0.4 s on a laptop; the whole analysis took 49.5 s). `config.py` now reads the container's cgroup CPU quota and caps all thread pools to it (`ANALYSIS_THREADS` overrides). A re-run after the change showed the CV stage at about 5 s. Re-measure on Render after deploying, since the cap depends on the quota Render reports.
+*   **Gemini SDK imported at startup** instead of during the first analysis, which removed a multi-second delay on the first request after a cold start.
+
+### Abuse protection (kept deliberately small for a demo)
+*   **Rate limits** (`slowapi`): login 10 per minute, register 10 per hour, upload 5 per minute. On Render the limiter uses the visitor address from `X-Forwarded-For`; without that, every visitor would share the proxy's address and one limit.
+*   **Queue cap:** at most 6 analyses queued or running (`MAX_PENDING_JOBS`). Every queued analysis holds a server worker thread, so without a cap a burst of uploads could freeze every other request.
+*   **Upload hardening:** 50 MB limit while the file is saved, and the stored file name is a generated ID, so a client filename such as `../../x.mp4` cannot choose where the file goes. Only a cleaned display name is kept.
+*   **Credentials:** passwords must be 8 to 72 bytes (bcrypt ignores or rejects anything longer). If `JWT_SECRET` is missing or is the old default that was published in this repository, the server signs tokens with a random secret instead, so a forged token is not possible; the cost is that everyone is signed out whenever the server restarts. Set `JWT_SECRET` in production.
+*   **Not included:** account lockout, daily quotas, security headers, and limits on the live stream and PDF export. These were built and tested, then removed to keep the demo simple; they are the next things to add before real traffic. This also does not defend against a volumetric (network-level) attack, which needs a CDN or the host's own protection.
 
 ---
 
@@ -296,7 +321,7 @@ uvicorn main:app --reload
 
 `backend/.env` (all optional except the JWT secret):
 ```env
-JWT_SECRET=your_secret
+JWT_SECRET=long_random_value  # set this in production (for example: openssl rand -hex 32)
 GEMINI_API_KEY=...            # primary LLM
 GROQ_API_KEY=...              # fallback LLM
 GROQ_VISION_MODEL=qwen/qwen3.8-27b  # optional override of the Groq model
@@ -305,8 +330,10 @@ GEN_API_URL=...               # optional external detector service; omit (deploy
 GEN_API_TOKEN=...             # bearer token for that service, if it needs one
 GEMINI_INPUT_USD_PER_M=...    # per-million-token prices, to compute cost per video
 GEMINI_OUTPUT_USD_PER_M=...
-MAX_VIDEO_PIXELS=1000000      # upload cap (about 720p)
+MAX_VIDEO_PIXELS=2100000      # upload cap (about 1080p)
 MAX_CONCURRENT_ANALYSES=1
+MAX_PENDING_JOBS=6            # queued + running analyses before uploads are refused
+ANALYSIS_THREADS=...          # optional: override the CPU thread cap detected from the container
 ```
 
 ### Frontend
