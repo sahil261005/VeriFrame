@@ -8,7 +8,7 @@ VeriFrame is an explainable multi-agent system that decides whether a video is a
 Think of it as a **panel of experts** looking at the same video:
 
 1. You upload a video (up to 30 s and 1080p).
-2. The app pulls out 6 key frames plus a few frames right after each one.
+2. The app reads the video one frame at a time and keeps 6 key frames plus a few frames right after each one, shrunk to 480p as they are read. The video file itself is never re-encoded.
 3. Several experts examine them **at the same time**:
    - one checks faces for swaps;
    - one checks the motion between frames for flicker;
@@ -28,7 +28,7 @@ On a 50-video test set it was right 88% of the time and wrongly flagged only 1 o
 *   **Explainable output.** Every verdict comes with per-frame, human-readable reasoning and a per-agent score breakdown, streamed live to the UI over Server-Sent Events.
 *   **Graceful degradation.** If an agent fails or is skipped (no audio track, no face in the video, API down), its weight is redistributed to the others. If no agent produced evidence, the answer is `UNCERTAIN`, never a false "authentic".
 *   **Measured, reproducible evaluation.** A 50-video benchmark built from public datasets, with a script that rebuilds the set and prints accuracy, per-generator detection rate, latency and token usage (see [Evaluation](#evaluation)).
-*   **Built for free tiers.** Memory was profiled and tuned (duplicate model weights removed, tracing that copied every frame removed, one analysis at a time, upload caps). Peak usage on a 480p job was about 565 MB on a Mac, so Render's 512 MB limit is tight and not yet verified in production. CPU use is capped to what the host actually gives the container (see [Production Safeguards](#production-safeguards-for-a-512-mb-host)).
+*   **Built for free tiers.** Memory was profiled and tuned (duplicate model weights removed, tracing that copied every frame removed, one analysis at a time, upload caps). After the memory fixes, a 1080p job peaked at about 490 MB on a Mac (see Production Safeguards), which leaves little room under Render's 512 MB limit, so the real figure should be read from Render's Metrics tab. CPU use is capped to what the host actually gives the container (see [Production Safeguards](#production-safeguards-for-a-512-mb-host)).
 *   **A report-style interface.** A light, paper-and-ink design. The score bars carry the real consensus cut-offs (0.30 and 0.48), the live screen shows each pipeline stage as it runs, and the report opens automatically when the analysis finishes.
 
 ---
@@ -211,7 +211,13 @@ The deployed setup (no hosted AI-generation detector, face-swap model local, Gem
 | Latency, median / 95th percentile | **3.4 s / 8.9 s** per video |
 | LLM calls / tokens per video | 1.14 / about 5,400 input and 220 output |
 
-By group: Sora 2 7/7 (via C2PA credentials), Veo 3 6/6, Kling 4/6, Wan 2 3/6; real HD 0 of 12 falsely flagged, real low-res 1 of 13.
+By group: Sora 2 7/7, Veo 3 6/6, Kling 4/6, Wan 2 3/6; real HD 0 of 12 falsely flagged, real low-res 1 of 13 flagged and 4 of 13 answered UNCERTAIN.
+
+How these were scored, and what they leave out:
+*   **UNCERTAIN counts as "not flagged".** On real videos that makes it correct (4 clips here); on AI videos it would count as a miss (none occurred). If UNCERTAIN on a real video is counted as wrong, accuracy is 40 / 50 = **80%**, and the false-positive rate is unchanged.
+*   **Confidence intervals (95%, Wilson):** accuracy 76-94%, precision 77-99%, recall 61-91%, false-positive rate 1-20%.
+*   **C2PA did most of the work.** All 13 Sora 2 and Veo 3 clips carried a signed AI label, which is 13 of the 20 detections. The LLM's own score alone flags 13 of the 25 AI clips (Sora 2 1/7, Veo 3 5/6, Kling 4/6, Wan 2 3/6) and 0 of the 25 real ones. That is an estimate from the saved scores, not a re-run of the full consensus.
+*   **The face-swap model ran on only 14 of the 50 videos** (the ones with a detected face). On the 3 AI clips it ran on it scored 0.18, 0.04 and 0.0, and it produced the one false positive.
 
 Run-to-run variation: an earlier live run of the same configuration, before the Groq fallback was fixed (2 videos got no LLM verdict after Gemini rate limits), scored 86% accuracy, 91% precision and 8% false positives. Gemini's answers vary slightly between runs, so expect a point or two of movement.
 
@@ -240,7 +246,9 @@ What this means:
 *   **UNCERTAIN verdicts (3)** count as not manipulated.
 
 ### Limitations
-*   **Small sample.** Fifty videos means roughly plus or minus 10 percentage points of uncertainty. Treat the numbers as an internal benchmark, not general accuracy.
+*   **Small sample.** Fifty videos means roughly plus or minus 10 percentage points of uncertainty (see the confidence intervals above). Treat the numbers as an internal benchmark, not general accuracy.
+*   **No held-out test set.** Prompts, frame selection and the decision to leave out the AI-generation detector were all made while looking at these same 50 videos, so the numbers are likely a little optimistic.
+*   **Real and AI clips differ in more than realness.** The real low-res clips are 320x240 sports footage and the AI clips are HD cinematic scenes, so resolution and content type are mixed in with the label.
 *   **Labels come from the datasets.** OpenVid-1M is scraped web footage, so a few "real" HD clips could be rendered or heavily processed.
 *   **No face-swap videos in this benchmark.** Face-swap detection (Celeb-DF, FaceForensics++ style data) was not evaluated.
 *   **Upload cap.** The evaluation script does not apply the web app's upload limit (about 1080p, 2.1 million pixels). The 1080p real clips fit it, but the 1440x1440 Kling clips (2.07 million pixels) are right at the edge, and anything larger would be rejected by the app.
