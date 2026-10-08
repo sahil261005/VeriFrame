@@ -1,17 +1,26 @@
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, Field, EmailStr, field_validator
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
 
 # schemas for registration and login
+def _check_password_bytes(value: str) -> str:
+    # bcrypt only reads the first 72 bytes and bcrypt 5 raises on longer input, so refuse it up front
+    if len(value.encode("utf-8")) > 72:
+        raise ValueError("Password must be at most 72 bytes long")
+    return value
+
+
 class RegisterRequest(BaseModel):
-    email: EmailStr
-    password: str = Field(..., min_length=6)
+    email: EmailStr = Field(..., max_length=254)
+    password: str = Field(..., min_length=8, max_length=72)
+
+    _password_bytes = field_validator("password")(_check_password_bytes)
 
 
 class LoginRequest(BaseModel):
-    email: str
-    password: str
+    email: str = Field(..., max_length=254)
+    password: str = Field(..., max_length=128)
 
 
 class TokenResponse(BaseModel):

@@ -36,7 +36,6 @@ from fastapi.responses import Response, StreamingResponse, JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from slowapi import Limiter
-from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
 import config
@@ -53,7 +52,15 @@ import cv2
 # initialize database tables on startup
 database.create_tables()
 
-limiter = Limiter(key_func=get_remote_address)
+def _client_ip(request: Request) -> str:
+    """behind Render's proxy every request arrives from the proxy, so use the address it appended to X-Forwarded-For"""
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if os.environ.get("RENDER") and forwarded:
+        return forwarded.split(",")[-1].strip()
+    return request.client.host if request.client else "unknown"
+
+
+limiter = Limiter(key_func=_client_ip)
 app = FastAPI(title="VeriFrame API", description="Multi-agent deepfake detection platform")
 app.state.limiter = limiter
 
@@ -103,7 +110,8 @@ def health_check():
 
 
 @app.post("/auth/register", response_model=schemas.TokenResponse)
-def register(req: schemas.RegisterRequest, db: Session = Depends(database.get_db)):
+@limiter.limit("10/hour")
+def register(request: Request, req: schemas.RegisterRequest, db: Session = Depends(database.get_db)):
     """register a new user"""
     # check if user already exists
     existing = db.query(models.User).filter(models.User.email == req.email).first()
@@ -126,7 +134,8 @@ def register(req: schemas.RegisterRequest, db: Session = Depends(database.get_db
 
 
 @app.post("/auth/login", response_model=schemas.TokenResponse)
-def login(req: schemas.LoginRequest, db: Session = Depends(database.get_db)):
+@limiter.limit("10/minute")
+def login(request: Request, req: schemas.LoginRequest, db: Session = Depends(database.get_db)):
     """login user and return token"""
     user = db.query(models.User).filter(models.User.email == req.email).first()
     if not user or not auth.verify_password(req.password, user.password_hash):
@@ -142,7 +151,8 @@ def login(req: schemas.LoginRequest, db: Session = Depends(database.get_db)):
 
 # Swagger UI token URL endpoint
 @app.post("/auth/swagger-token", response_model=schemas.TokenResponse)
-def swagger_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(database.get_db)):
+@limiter.limit("10/minute")
+def swagger_token(request: Request, form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(database.get_db)):
     """Swagger-compatible OAuth2 password token flow"""
     user = db.query(models.User).filter(models.User.email == form_data.username).first()
     if not user or not auth.verify_password(form_data.password, user.password_hash):
@@ -162,9 +172,21 @@ _analysis_slot = threading.Semaphore(int(os.environ.get("MAX_CONCURRENT_ANALYSES
 
 
 # worker function to run the deepfake analysis in the background
+# every queued analysis parks a worker thread while it waits, so unlimited uploads would freeze the whole server
+MAX_PENDING_JOBS = int(os.environ.get("MAX_PENDING_JOBS", "6"))
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+_pending_jobs = 0
+_pending_lock = threading.Lock()
+
+
 def process_video_task(job_id: str, temp_path: str, meta: dict):
-    with _analysis_slot:
-        _process_video(job_id, temp_path, meta)
+    global _pending_jobs
+    try:
+        with _analysis_slot:
+            _process_video(job_id, temp_path, meta)
+    finally:
+        with _pending_lock:
+            _pending_jobs -= 1
 
 
 def _process_video(job_id: str, temp_path: str, meta: dict):
@@ -280,30 +302,49 @@ def upload_video(
             detail=f"Unsupported video format: .{ext}. Only mp4, avi, mov, and webm are allowed."
         )
         
+    global _pending_jobs
+    with _pending_lock:
+        if _pending_jobs >= MAX_PENDING_JOBS:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="VeriFrame is busy analysing other videos. Please try again in a minute."
+            )
+        _pending_jobs += 1
+
     import uuid
     job_uuid = str(uuid.uuid4())
-    temp_filename = f"{job_uuid}_{file.filename}"
-    temp_filepath = os.path.join(config.UPLOAD_DIR, temp_filename)
-    
+    # the stored name is generated here, so a client filename like "../../x" can never choose where the file goes
+    temp_filepath = os.path.join(config.UPLOAD_DIR, f"{job_uuid}.{ext}")
+
     try:
+        written = 0
         with open(temp_filepath, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-            
+            while chunk := file.file.read(1024 * 1024):
+                written += len(chunk)
+                if written > MAX_UPLOAD_BYTES:
+                    raise ValueError(f"Video is too large. The limit is {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.")
+                buffer.write(chunk)
+
         meta = preprocessing.validate_video(temp_filepath)
-        
+
     except ValueError as val_err:
         if os.path.exists(temp_filepath):
             os.remove(temp_filepath)
+        with _pending_lock:
+            _pending_jobs -= 1
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(val_err)
         )
-    except Exception as exc:
+    except Exception:
+        logger.exception("error saving or reading upload for job %s", job_uuid)
         if os.path.exists(temp_filepath):
             os.remove(temp_filepath)
+        with _pending_lock:
+            _pending_jobs -= 1
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error saving or reading upload file: {exc}"
+            detail="Could not process the uploaded video."
         )
         
     # initialize SSE event bus for this job
@@ -313,7 +354,7 @@ def upload_video(
         id=job_uuid,
         user_id=current_user.id,
         status="processing",
-        video_filename=file.filename,
+        video_filename=os.path.basename((file.filename or "video").replace("\\", "/"))[-120:],
         duration=meta.get("duration", 0.0)
     )
     db.add(job)

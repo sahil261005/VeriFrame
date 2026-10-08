@@ -2,6 +2,8 @@ import React, { useState, useRef } from 'react';
 import { CloudUpload, FileVideo, ScanFace, Activity, AudioWaveform, BadgeCheck, BrainCircuit, Scale, TriangleAlert, X } from 'lucide-react';
 import { analysisService } from '../api';
 
+const MAX_UPLOAD_MB = 50; // keep in step with MAX_UPLOAD_MB on the backend
+
 const CHECKS = [
   { icon: ScanFace, name: 'Face-swap detector', desc: 'Vision Transformer on each keyframe', tech: 'ViT · ONNX' },
   { icon: Activity, name: 'Motion consistency', desc: 'Flicker and landmark jitter between frames', tech: 'optical flow' },
@@ -50,6 +52,11 @@ function Upload({ onUploadSuccess }) {
     const allowed = ['mp4', 'avi', 'mov', 'webm'];
     if (!allowed.includes(ext)) {
       setError(`Unsupported video format .${ext}. Only MP4, AVI, MOV, and WEBM are supported.`);
+      setFile(null);
+      return;
+    }
+    if (selectedFile.size > MAX_UPLOAD_MB * 1024 * 1024) {
+      setError(`Video is too large (${(selectedFile.size / (1024 * 1024)).toFixed(0)} MB). The limit is ${MAX_UPLOAD_MB} MB.`);
       setFile(null);
       return;
     }

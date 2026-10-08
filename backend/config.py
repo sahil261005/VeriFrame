@@ -6,7 +6,17 @@ import os
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./veriframe.db")
 
 # secret key for jwt tokens. in production, this should be a random string.
-JWT_SECRET = os.environ.get("JWT_SECRET", "super-secret-key-change-this-in-production")
+_PUBLISHED_DEFAULT_SECRET = "super-secret-key-change-this-in-production"  # was committed to the repo, so it is public
+JWT_SECRET = os.environ.get("JWT_SECRET", "")
+JWT_SECRET_IS_EPHEMERAL = not JWT_SECRET or JWT_SECRET == _PUBLISHED_DEFAULT_SECRET
+if JWT_SECRET_IS_EPHEMERAL:
+    # never sign tokens with a guessable key: use a random one (everyone is signed out whenever the server restarts)
+    import secrets
+    JWT_SECRET = secrets.token_urlsafe(48)
+    print("WARNING: JWT_SECRET is not set (or is the published default). Using a random secret for this process; "
+          "set JWT_SECRET to a long random value so logins survive restarts.", flush=True)
+elif len(JWT_SECRET) < 32:
+    print("WARNING: JWT_SECRET is shorter than 32 characters; use a longer random value.", flush=True)
 
 # default token expiration (30 minutes)
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
