@@ -82,7 +82,7 @@ function ResultsDashboard() {
     ...(performance.extract_seconds != null ? [['frame extraction', performance.extract_seconds]] : []),
     ...Object.entries(performance.stage_seconds || {}).map(([k, v]) => [stageLabels[k] || k, v]),
   ];
-  const stageBreakdown = stages.map(([name, secs]) => `${name}: ${Number(secs).toFixed(1)}s`).join('\n');
+  const stageBreakdown = stages.map(([name, secs]) => `${name} ${Number(secs).toFixed(1)}s`).join('  ·  ');
   
   const getRobustnessLabel = (score) => {
     if (score >= 0.8) return 'High';
@@ -161,13 +161,18 @@ function ResultsDashboard() {
               {performance.total_seconds != null && (
                 <>
                   <span>•</span>
-                  <span title={stageBreakdown} style={{ cursor: stageBreakdown ? 'help' : 'default' }}>
+                  <span>
                     Analyzed in {performance.total_seconds.toFixed(1)}s
                     {performance.llm_cost_usd != null && performance.llm_calls > 0 && ` · LLM cost $${performance.llm_cost_usd.toFixed(4)}`}
                   </span>
                 </>
               )}
             </div>
+            {stageBreakdown && (
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '6px' }}>
+                Time per stage: {stageBreakdown}
+              </div>
+            )}
           </div>
           
           <div style={{ display: 'flex', gap: '24px', alignItems: 'center', flexWrap: 'wrap' }}>
