@@ -278,14 +278,19 @@ a { color: var(--ink); }
 .timing-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--ink-2); }
 .timing-legend i { width: 9px; height: 9px; border-radius: 1px; display: inline-block; margin-right: 6px; }
 
-.agent-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
-.agent-card { display: flex; flex-direction: column; gap: 10px; padding: 18px; }
+.agent-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+.agent-card { display: flex; flex-direction: column; gap: 10px; padding: 14px; min-width: 0; }
 .agent-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .agent-icon { width: 30px; height: 30px; border-radius: 5px; display: grid; place-items: center; background: var(--sheet-2); color: var(--ink); border: 1px solid var(--rule); }
-.agent-name { font-family: var(--font-display); font-size: 16px; font-weight: 700; }
-.agent-desc { font-size: 13.5px; color: var(--ink-2); line-height: 1.55; flex: 1; }
+.agent-name { font-family: var(--font-display); font-size: 15px; font-weight: 700; line-height: 1.25; }
+.agent-desc { font-size: 13px; color: var(--ink-2); line-height: 1.5; flex: 1; overflow-wrap: anywhere; }
 .score-row { display: flex; justify-content: space-between; align-items: baseline; padding-top: 12px; border-top: 1px solid var(--rule); font-size: 13px; color: var(--ink-2); }
-.score-row strong { font-family: var(--font-mono); font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.score-row strong { font-family: var(--font-mono); font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.agent-facts { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--rule); }
+.agent-fact { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; }
+.agent-fact span:last-child { font-family: var(--font-mono); font-size: 12px; color: var(--ink); overflow-wrap: anywhere; }
+@media (max-width: 1100px) { .agent-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .agent-grid { grid-template-columns: 1fr; } }
 
 .banner { display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px; border-radius: var(--radius); font-size: 14px; line-height: 1.55; border: 1px solid; border-left-width: 4px; }
 .banner svg { flex-shrink: 0; margin-top: 2px; }

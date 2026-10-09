@@ -1,5 +1,5 @@
 import React from 'react';
-import { ScanFace, Activity, AudioWaveform, BrainCircuit, BadgeCheck, TriangleAlert, ShieldAlert } from 'lucide-react';
+import { ScanFace, Activity, AudioWaveform, BrainCircuit, BadgeCheck, TriangleAlert, ShieldAlert, FileSearch } from 'lucide-react';
 import ThresholdMeter from './ThresholdMeter';
 
 const STATUS_BADGE = {
@@ -25,12 +25,46 @@ function AgentCard({ icon: Icon, title, status, badgeText, description, scoreLab
       <div className="agent-desc" title={typeof description === 'string' ? description : undefined}>
         <span style={{ display: '-webkit-box', WebkitLineClamp: 5, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{description}</span>
       </div>
-      <div className="score-row">
+      <div className="score-row" style={{ marginTop: 'auto' }}>
         <span>{scoreLabel}</span>
         <strong style={{ color: hasScore ? scoreColor(score) : 'var(--text-muted)' }}>{hasScore ? score.toFixed(2) : 'N/A'}</strong>
       </div>
       {hasScore ? <ThresholdMeter score={score} color={scoreColor(score)} compact /> : <div className="meter" style={{ height: '6px', opacity: 0.45 }} />}
       {footnote && <div className="muted" style={{ fontSize: '11.5px' }}>{footnote}</div>}
+    </div>
+  );
+}
+
+// provenance has no 0-1 fake score: it reports what the file itself says, so it shows facts instead of a meter
+function ProvenanceCard({ provenance }) {
+  const found = !!provenance.c2pa_present;
+  const aiLabel = found && !!provenance.c2pa_ai_generated;
+  const badgeClass = aiLabel ? 'badge-manipulated' : found ? 'badge-authentic' : 'badge-neutral';
+  const badgeText = aiLabel ? 'AI label' : found ? 'Signed' : 'None found';
+  const generator = provenance.c2pa_generator;
+  const description = aiLabel
+    ? `The file's signed metadata declares it AI-generated${generator ? ` by ${generator}` : ''}. This counts as strong evidence.`
+    : found
+      ? `Signed by ${generator || 'an unknown tool'}, with no AI generation declared.`
+      : 'No signed Content Credentials in this file. Cameras, screen recordings and re-uploads usually carry none, so this is neutral and does not prove the video is real.';
+  const credentials = found
+    ? `${aiLabel ? 'AI-generated' : 'Signed'} · ${provenance.c2pa_signature_valid ? 'signature valid' : 'signature unverified'}`
+    : 'None found';
+  const metadata = provenance.metadata_stripped === false && provenance.encoder && provenance.encoder !== 'unknown'
+    ? `Encoder: ${provenance.encoder}`
+    : 'No encoder tag found';
+  return (
+    <div className="card agent-card">
+      <div className="agent-head">
+        <div className="agent-icon"><FileSearch size={16} /></div>
+        <span className={`badge ${badgeClass}`}>{badgeText}</span>
+      </div>
+      <div className="agent-name">Provenance</div>
+      <div className="agent-desc">{description}</div>
+      <div className="agent-facts">
+        <div className="agent-fact"><span className="label">C2PA credentials</span><span>{credentials}</span></div>
+        <div className="agent-fact"><span className="label">File metadata</span><span>{metadata}</span></div>
+      </div>
     </div>
   );
 }
@@ -80,6 +114,7 @@ function AgentBreakdown({ breakdown, isPartial }) {
       </div>
 
       <div className="agent-grid">
+        <ProvenanceCard provenance={provenance} />
         <AgentCard
           icon={ScanFace}
           title="Visual forensics"
@@ -111,7 +146,7 @@ function AgentBreakdown({ breakdown, isPartial }) {
         />
         <AgentCard
           icon={BrainCircuit}
-          title={`LLM reasoning · ${llmProvider}`}
+          title={`LLM · ${llmProvider}`}
           status={llm.status}
           description={llmSummary || 'A vision LLM reviews the most suspicious frames and explains what looks wrong.'}
           scoreLabel="Fake score"

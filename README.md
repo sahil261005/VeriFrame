@@ -93,7 +93,7 @@ frontend/src/components/
 ├── Upload                        # Intake page: list of checks + drop zone
 ├── StatusFeed                    # Live screen: progress bar per stage, agent graph, event stream, auto-opens the report
 ├── ResultsDashboard              # Verdict, score vs thresholds, time per stage
-├── AgentBreakdown, ThresholdMeter, FrameGallery   # Per-agent evidence, score bars, frames with LLM notes
+├── AgentBreakdown, ThresholdMeter, FrameGallery   # Five evidence cards in one row (Provenance, Visual, Temporal, Audio, LLM), score bars, frames with LLM notes
 ```
 
 ---
