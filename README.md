@@ -313,6 +313,14 @@ Final run (deployed configuration), 6 errors in 50:
 *   **CPU thread cap.** Render's free tier gives a fraction of a CPU but shows the container all of the host's cores. ONNX Runtime and OpenCV each started one thread per visible core, so the threads fought over a tiny share and the CV stage took 38.7 s (about 100x slower than the 0.4 s on a laptop; the whole analysis took 49.5 s). `config.py` now reads the container's cgroup CPU quota and caps all thread pools to it (`ANALYSIS_THREADS` overrides). A later re-run showed the CV stage at about 5 s. Hosted runs of a longer clip (12.9 s, 964x1090) still took 47-50 s in total: frame extraction 15.9 s, CV agents 22.9 s, LLM 7.0 s. The free instance has only a fraction of a core, so decoding and the CV agents are slow however the threads are set. This is a hosting limit, so it was left as is for a demo (on a laptop the same pipeline takes about 3.4 s).
 *   **Gemini SDK imported at startup** instead of during the first analysis, which removed a multi-second delay on the first request after a cold start.
 
+### Reliability (found in a code audit)
+*   **Database connections** are tested before use and recycled every 5 minutes, because Supabase closes idle connections.
+*   **LLM timeouts:** Gemini times out after 60 s and Groq after 30 s (one retry), so a stuck call cannot hold the only analysis slot. Groq then answers if Gemini timed out.
+*   **Queue slot:** if saving a job fails, the slot is given back, so repeated failures cannot block all uploads. The analysis runs in its own thread, so a browser that disconnects early cannot leave a job stuck on "processing".
+*   **Startup cleanup:** leftover uploads from a crash are deleted and interrupted jobs are marked failed. A video with no readable frames fails with a clear message, and the report page shows a message for failed or running jobs.
+*   **Health check** also touches the database, so the keep-alive ping keeps the free Supabase project from being paused.
+*   **Dependencies are pinned** to the versions that were tested, so a new release cannot silently break the app.
+
 ### Abuse protection (kept deliberately small for a demo)
 *   **Rate limits** (`slowapi`): login 10 per minute, register 10 per hour, upload 5 per minute. On Render the limiter uses the visitor address from `X-Forwarded-For`; without that, every visitor would share the proxy's address and one limit.
 *   **Queue cap:** at most 6 analyses queued or running (`MAX_PENDING_JOBS`). Every queued analysis holds a server worker thread, so without a cap a burst of uploads could freeze every other request.
