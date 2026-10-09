@@ -34,8 +34,8 @@ def reduce_events(left: list, right: list) -> list:
 
 def reduce_sum(left: dict, right: dict) -> dict:
     """
-    reducer that adds numeric values per key. used for timings and LLM token usage, where a node can run
-    more than once (the reflection loop re-runs the LLM) and every run should count.
+    adds up numbers per key. used for timings and llm token usage since the reflection
+    loop can run the llm node more than once and we want every run counted.
     """
     merged = dict(left or {})
     for key, value in (right or {}).items():
@@ -45,7 +45,7 @@ def reduce_sum(left: dict, right: dict) -> dict:
 
 class VeriFrameState(TypedDict, total=False):
     # input stuff
-    job_id: str               # must be declared: LangGraph drops undeclared keys, which silenced every live SSE event
+    job_id: str               # has to be declared here, langgraph drops keys it doesnt know and then no SSE events showed up
     video_path: str
     metadata: Dict[str, Any]
     frames: List[Dict[str, Any]]
@@ -55,11 +55,11 @@ class VeriFrameState(TypedDict, total=False):
     visual_flagged_frames: List[Dict[str, Any]]
     visual_per_frame: List[Dict[str, Any]]
 
-    # generative-video agent output (fully AI-generated footage: Sora/Kling/Runway/Veo...)
+    # generative agent output, for fully AI generated videos like sora, kling, runway, veo
     generative_score: float
     generative_flagged_frames: List[Dict[str, Any]]
     generative_per_frame: List[Dict[str, Any]]
-    generative_future: Any     # background future of the generative node, collected by synthesis
+    generative_future: Any     # the generative node runs in the background, synthesis picks up the result from this
 
     # temporal agent output
     temporal_score: float
@@ -72,12 +72,12 @@ class VeriFrameState(TypedDict, total=False):
     audio_details: Dict[str, Any]
     has_audio: bool
 
-    # routing decisions (set by router node)
+    # routing stuff, set by the router node
     route_decision: str       # "skip_llm", "llm_extended", or "llm_normal"
     llm_frame_count: int      # how many frames to send to LLM (3 or 4)
 
     # llm agent output
-    llm_frame_timestamps: List[float]  # the frames the LLM actually looked at (shown in the UI gallery)
+    llm_frame_timestamps: List[float]  # frames the llm actually looked at, shown in the UI gallery
     llm_reasoning: str
     frame_explanations: Dict[str, str]
     llm_score: float
@@ -97,7 +97,7 @@ class VeriFrameState(TypedDict, total=False):
     # annotated with reduce_dict so parallel nodes can write to it at the same time.
     agent_status: Annotated[Dict[str, str], reduce_dict]
 
-    # per-node wall time in seconds and LLM token usage, summed across reflection-loop re-runs
+    # time per node in seconds and llm token usage, added up over reflection loop reruns
     timings: Annotated[Dict[str, float], reduce_sum]
     llm_usage: Annotated[Dict[str, float], reduce_sum]
 

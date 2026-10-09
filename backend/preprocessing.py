@@ -11,14 +11,14 @@ import cv2
 
 import config
 
-cv2.setNumThreads(config.CPU_THREADS)  # OpenCV's own pool also defaults to every visible core
+cv2.setNumThreads(config.CPU_THREADS)  # opencv has its own thread pool that uses every core by default too
 
 logger = logging.getLogger(__name__)
 
 
 def open_video(file_path):
-    # OpenCV's FFmpeg decoder starts one thread per visible CPU core, each holding its own frame buffers. A shared
-    # host shows the container every core, so decode on a single thread (measured: 1080p +118 MB -> +48 MB)
+    # opencvs ffmpeg decoder starts a thread per cpu core and each one keeps its own frame buffers. on a shared host
+    # the container sees every core so we decode on one thread. 1080p went from +118mb to +48mb with this
     cap = cv2.VideoCapture(file_path, cv2.CAP_FFMPEG, [cv2.CAP_PROP_N_THREADS, 1])
     if not cap.isOpened():
         cap = cv2.VideoCapture(file_path)
@@ -26,8 +26,8 @@ def open_video(file_path):
 
 
 def release_memory():
-    # freed memory otherwise stays with the process, so each analysis would start from a higher baseline.
-    # malloc_trim hands it back to the OS (glibc only, i.e. Linux; a no-op elsewhere)
+    # freed memory stays with the process otherwise, so each analysis would start higher than the last one
+    # malloc_trim gives it back to the os. only works on linux with glibc and does nothing anywhere else
     gc.collect()
     try:
         ctypes.CDLL("libc.so.6").malloc_trim(0)
@@ -36,22 +36,22 @@ def release_memory():
 
 
 # real cameras have sensor noise but AI generated frames are usually super clean and smooth
-# normalized 0-1 scale, identical to agents.tools.analyze_noise_pattern so all thresholds agree
+# 0-1 scale, same as agents.tools.analyze_noise_pattern so the thresholds match
 def compute_noise_residual(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     return float(np.var(gray - blurred))
 
 
-# IPTC digital source types (the vocabulary C2PA uses) that declare media was made by generative AI
+# IPTC source types that C2PA uses to say the media was made by generative AI
 _AI_SOURCE_TYPES = ("trainedalgorithmicmedia", "compositewithtrainedalgorithmicmedia")
 
 
 def read_c2pa(file_path):
     """
-    reads C2PA Content Credentials embedded in the video, if any. AI tools that support C2PA record a
-    digitalSourceType of "trainedAlgorithmicMedia" when they generate content; edits keep the original
-    manifest as an ingredient, so every manifest in the store is checked, not just the latest one.
+    reads the C2PA content credentials in the video if there are any. AI tools that support C2PA write a
+    digitalSourceType of "trainedAlgorithmicMedia" and edits keep the original manifest as an ingredient,
+    so we check every manifest in the store and not just the latest one
     """
     result = {
         "c2pa_present": False,
@@ -62,7 +62,7 @@ def read_c2pa(file_path):
         "c2pa_source_types": [],
     }
     try:
-        import c2pa  # c2pa-python; optional (needs python >= 3.10)
+        import c2pa  # c2pa-python, its optional and needs python 3.10+
     except ImportError:
         logger.info("c2pa-python not installed; skipping Content Credentials check")
         return result
@@ -95,7 +95,7 @@ def read_c2pa(file_path):
 
     result.update({
         "c2pa_present": True,
-        # "Valid" = signature and hashes check out; "Trusted" additionally = signer is on a trust list
+        # valid means the signature and hashes check out, trusted means the signer is also on a trust list
         "c2pa_signature_valid": state.lower() in ("valid", "trusted"),
         "c2pa_trusted_signer": state.lower() == "trusted",
         "c2pa_ai_generated": any(t.rstrip("/").split("/")[-1].lower() in _AI_SOURCE_TYPES for t in source_types),
@@ -106,7 +106,7 @@ def read_c2pa(file_path):
 
 
 def check_provenance(file_path):
-    # set up default values
+    # default values
     provenance_score = 0.5
     c2pa_compliant = False
     encoder = "unknown"
@@ -150,7 +150,7 @@ def check_provenance(file_path):
     else:
         logger.warning("ffprobe not found, skipping container checks")
 
-    # real Content Credentials check (replaces the old keyword search in ffprobe output)
+    # real content credentials check, this replaced the old keyword search in the ffprobe output
     c2pa_info = read_c2pa(file_path)
     if c2pa_info["c2pa_present"]:
         metadata_stripped = False
@@ -214,8 +214,8 @@ def get_video_metadata(file_path):
     # run our metadata checks
     provenance = check_provenance(file_path)
     
-    # calculate adversarial robustness score based on resolution and bitrate thresholds
-    # low-resolution and low-bitrate streams make it easy to hide manipulation signatures
+    # adversarial robustness score based on resolution and bitrate
+    # low res and low bitrate videos make it easy to hide manipulation
     robustness = 1.0
     
     if width < 1280 or height < 720:
@@ -224,9 +224,9 @@ def get_video_metadata(file_path):
         robustness -= 0.30
         
     if bitrate > 0:
-        if bitrate < 500000:  # < 500 kbps
+        if bitrate < 500000:  # under 500 kbps
             robustness -= 0.15
-        if bitrate < 200000:  # < 200 kbps
+        if bitrate < 200000:  # under 200 kbps
             robustness -= 0.25
             
     robustness_score = round(max(0.1, robustness), 2)
@@ -260,9 +260,9 @@ def validate_video(file_path):
     if meta["duration"] > 30.0:
         raise ValueError(f"video duration is {meta['duration']}s, which exceeds the 30-second limit")
 
-    # frames are decoded one at a time and shrunk to 480p as they arrive, so the cost is the decoder itself.
-    # measured with a single decoder thread: 720p +25 MB, 1080p +48 MB, 4K +167 MB. 4K does not fit a 512MB host.
-    # the cap is on total pixels (~1080p) so portrait and odd-shaped screen recordings are not rejected
+    # frames get decoded one by one and shrunk to 480p so the decoder is what actually uses memory
+    # with one decoder thread: 720p +25mb, 1080p +48mb, 4k +167mb. 4k doesnt fit on a 512mb server
+    # the limit is on total pixels, about 1080p, so portrait and weird shaped screen recordings still work
     max_pixels = int(os.environ.get("MAX_VIDEO_PIXELS", "2100000"))
     w, h = meta.get("width", 0) or 0, meta.get("height", 0) or 0
     if w * h > max_pixels:
@@ -270,8 +270,8 @@ def validate_video(file_path):
 
     return meta
 
-# number of consecutive frames captured after each keyframe for the temporal agent,
-# and the width they are stored at (small, to keep memory low)
+# how many frames in a row we grab after each keyframe for the temporal agent
+# and the width we store them at, kept small to save memory
 BURST_LENGTH = 8
 BURST_WIDTH = 480
 
@@ -283,7 +283,7 @@ def _resize_to_width(frame, width):
     return cv2.resize(frame, (width, max(1, int(h * width / w))), interpolation=cv2.INTER_AREA)
 
 
-# pull sample frames using fast sequential grab (avoids slow container seek stalls)
+# pull sample frames with fast sequential grab since seeking in the container is slow
 def extract_frames(file_path, interval=1.0, target_height=480, max_frames=6):
     cap = open_video(file_path)
     if not cap.isOpened():
@@ -299,7 +299,7 @@ def extract_frames(file_path, interval=1.0, target_height=480, max_frames=6):
     # pick 5-6 evenly spaced keyframes across the whole video
     num_samples = min(max_frames, max(4, int(duration / interval)))
     if total_frames <= 0:
-        # some containers (often webm) report no frame count; sample by time instead
+        # some containers like webm dont report a frame count so we sample by time instead
         num_samples = max_frames
         step = max(1, int(round(interval * fps)))
         target_indices = set(i * step for i in range(num_samples))
@@ -309,17 +309,17 @@ def extract_frames(file_path, interval=1.0, target_height=480, max_frames=6):
     else:
         target_indices = set(range(max(1, total_frames)))
 
-    # temporal artifacts (flicker, landmark jitter) only show up between neighbouring frames,
-    # so each keyframe also gets a short burst of the frames right after it (~30fps spacing)
+    # temporal stuff like flicker and landmark jitter only shows up between neighbouring frames
+    # so each keyframe also gets a short burst of the frames right after it, about 30fps apart
     burst_stride = max(1, int(round(fps / 30.0)))
     burst_span = (BURST_LENGTH - 1) * burst_stride
-    active_bursts = {}  # keyframe index -> keyframe dict still collecting burst frames
+    active_bursts = {}  # keyframe index -> its dict while the burst is still filling up
         
     frames = []
     current_idx = 0
     
     while cap.isOpened() and (len(frames) < num_samples or active_bursts):
-        # cap.grab() is extremely fast (skips decoding non-target frames)
+        # cap.grab() is really fast because it skips decoding frames we dont need
         grabbed = cap.grab()
         if not grabbed:
             break
@@ -370,7 +370,7 @@ def extract_audio(file_path, output_path):
         logger.warning("ffmpeg command not found. skipping audio extraction.")
         return None
         
-    # -y = overwrite, -vn = no video, acodec mp3 = encode to mp3
+    # -y overwrites, -vn drops the video, libmp3lame encodes to mp3
     cmd = [
         "ffmpeg", "-y", "-i", file_path,
         "-vn",

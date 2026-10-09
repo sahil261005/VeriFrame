@@ -6,7 +6,7 @@ import time
 import statistics
 from dotenv import load_dotenv
 
-# same environment as the server (main.py): API keys from .env, LangSmith tracing off
+# same setup as main.py, api keys from .env and langsmith tracing off
 load_dotenv()
 for _var in ("LANGCHAIN_TRACING_V2", "LANGCHAIN_TRACING", "LANGSMITH_TRACING"):
     os.environ[_var] = "false"
@@ -22,9 +22,8 @@ logger = logging.getLogger("evaluate_pipeline")
 
 def run_evaluation(test_dir, labels_json_path, scores_csv_path=None):
     """
-    Evaluates the multi-agent consensus pipeline against a directory of test videos
-    using a labels JSON file mapping video filenames to truth labels ("AUTHENTIC" or "MANIPULATED").
-    a label can also carry a category for per-group results:
+    runs the pipeline on a folder of test videos and compares it to a labels json that maps
+    filenames to "AUTHENTIC" or "MANIPULATED". a label can also have a category for per group results like
         "clip.mp4": {"label": "MANIPULATED", "category": "ai_generated"}
     """
     if not os.path.exists(test_dir):
@@ -59,12 +58,12 @@ def run_evaluation(test_dir, labels_json_path, scores_csv_path=None):
         logger.info(f"Processing evaluation for: {filename} (Truth: {true_label})")
         
         try:
-            # 1. Preprocessing: mirror main.process_video_task exactly so metrics reflect production
+            # 1. preprocessing, same as main.process_video_task so the numbers match production
             video_start = time.perf_counter()
             metadata = preprocessing.get_video_metadata(video_path)
             frames = preprocessing.extract_frames(video_path, interval=1.0, target_height=480, max_frames=6)
 
-            # 2. Invoke multi-agent graph (original file passed for audio forensics, as in production)
+            # 2. run the agent graph, the original file is passed for the audio check like in production
             output = run_pipeline(frames, metadata, video_path=video_path)
             video_seconds = time.perf_counter() - video_start
             perf = output.get("performance", {})
@@ -81,7 +80,7 @@ def run_evaluation(test_dir, labels_json_path, scores_csv_path=None):
                 "truth": true_label,
                 "prediction": predicted_verdict,
                 "confidence": confidence,
-                # per-agent evidence, so fusion weights/thresholds can be fitted on labelled data
+                # per agent scores so the fusion weights and thresholds can be tuned on labelled data
                 "visual_score": output.get("visual_score", 0.0),
                 "visual_status": status.get("visual", ""),
                 "temporal_score": output.get("temporal_score", 0.0),
@@ -100,7 +99,7 @@ def run_evaluation(test_dir, labels_json_path, scores_csv_path=None):
                 "llm_cost_usd": perf.get("llm_cost_usd")
             })
 
-            # Calculate classification metrics (ignoring UNCERTAIN for clean binary check, or marking it as error)
+            # count up the results. UNCERTAIN just counts as not manipulated here
             if true_label == "MANIPULATED":
                 if predicted_verdict == "MANIPULATED":
                     tp += 1
@@ -122,7 +121,7 @@ def run_evaluation(test_dir, labels_json_path, scores_csv_path=None):
             writer.writerows(results)
         logger.info(f"Per-agent scores written to {scores_csv_path}")
 
-    # Output metrics summary
+    # print the summary
     total = tp + fp + tn + fn
     if total == 0:
         logger.warning("No videos successfully evaluated.")
@@ -151,7 +150,7 @@ def run_evaluation(test_dir, labels_json_path, scores_csv_path=None):
     print(f"Recall:               {recall * 100:.2f}%")
     print(f"False Positive Rate:  {fpr * 100:.2f}%")
 
-    # per group: detection rate for manipulated categories, false-positive rate for real footage
+    # per group results. detection rate for the fake categories and false positive rate for real footage
     categories = sorted(set(r["category"] for r in results))
     if len(categories) > 1:
         print("-"*50)
@@ -161,7 +160,7 @@ def run_evaluation(test_dir, labels_json_path, scores_csv_path=None):
             kind = "false-positive rate" if all(r["truth"] == "AUTHENTIC" for r in rows) else "detection rate"
             print(f"{cat:20s} n={len(rows):3d}  {kind}: {flagged / len(rows) * 100:.1f}%")
 
-    # latency and cost per video (same measurement the report shows in production)
+    # latency and cost per video, same numbers the report shows in production
     seconds = sorted(r["seconds"] for r in results)
     if seconds:
         p95_index = min(len(seconds) - 1, max(0, int(round(0.95 * len(seconds))) - 1))
@@ -186,7 +185,7 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
-    # Check for placeholder file creation guidance if run directly with no data
+    # if theres no test data yet just print how to set it up
     if not os.path.exists(args.dir) or not os.path.exists(args.labels):
         print("\n" + "!"*60)
         print("💡 HOW TO RUN VERIFRAME PIPELINE EVALUATION:")

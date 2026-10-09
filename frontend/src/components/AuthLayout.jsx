@@ -2,7 +2,7 @@ import React from 'react';
 import { ScanFace, Activity, AudioWaveform, BadgeCheck, BrainCircuit } from 'lucide-react';
 import ThresholdMeter from './ThresholdMeter';
 
-// example numbers for the pitch only, never real results
+// just example numbers for the landing side, not real results
 const SAMPLE = [
   { icon: ScanFace, name: 'Face-swap', score: 0.12 },
   { icon: Activity, name: 'Motion', score: 0.31 },

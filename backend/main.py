@@ -12,28 +12,29 @@ load_dotenv()
 
 import config
 
-# must be set before numpy / OpenCV / onnxruntime are imported (see config.CPU_THREADS)
+# has to be set before numpy, opencv and onnxruntime get imported, see config.CPU_THREADS
 for _var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
     os.environ.setdefault(_var, str(config.CPU_THREADS))
 
-# LangSmith tracing is disabled for good: LangGraph would otherwise copy and upload every node's state
-# (including all decoded video frames) on each step, which tripled memory use and sends user videos to a third party
+# langsmith tracing is off for good. langgraph would copy and upload every nodes state with all the video frames
+# on each step, which tripled memory use and sent user videos to a third party
 for _var in ("LANGCHAIN_TRACING_V2", "LANGCHAIN_TRACING", "LANGSMITH_TRACING"):
     os.environ[_var] = "false"
 for _var in ("LANGCHAIN_API_KEY", "LANGSMITH_API_KEY"):
     os.environ.pop(_var, None)
 
-# Configure simple logging for the application
+# basic logging setup
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
 logger = logging.getLogger(__name__)
 
-from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile, BackgroundTasks, Request
+from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse, JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
@@ -49,11 +50,11 @@ import agents.event_bus as event_bus
 from agents.orchestrator import run_pipeline
 import cv2
 
-# initialize database tables on startup
+# create the db tables on startup
 database.create_tables()
 
 def _client_ip(request: Request) -> str:
-    """behind Render's proxy every request arrives from the proxy, so use the address it appended to X-Forwarded-For"""
+    """on render every request comes from their proxy so we use the ip it added to X-Forwarded-For"""
     forwarded = request.headers.get("x-forwarded-for", "")
     if os.environ.get("RENDER") and forwarded:
         return forwarded.split(",")[-1].strip()
@@ -66,14 +67,14 @@ app.state.limiter = limiter
 
 @app.exception_handler(RateLimitExceeded)
 def rate_limit_handler(request: Request, exc: RateLimitExceeded):
-    # raising inside an exception handler surfaces as a 500, so return the 429 directly
+    # raising in here turns into a 500 so we just return the 429 ourselves
     return JSONResponse(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-        content={"detail": "Rate limit exceeded. You can only scan up to 5 videos per minute."}
+        content={"detail": "Too many requests. Please wait a minute and try again."}
     )
 
 
-# CORS middleware configuration for local testing
+# cors setup for local testing
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.CORS_ORIGINS,
@@ -90,8 +91,8 @@ import agents.remote_detector as remote_detector
 
 
 def _fail_orphaned_jobs():
-    """jobs still "processing" at boot belonged to a previous process (e.g. one killed for running out of memory).
-    nothing will ever finish them, so mark them failed and the page shows an error instead of waiting forever"""
+    """jobs still "processing" at boot are from an old process that died, like when it ran out of memory.
+    nothing will ever finish them so we mark them failed and the page shows an error instead of loading forever"""
     db = database.SessionLocal()
     try:
         orphans = db.query(models.AnalysisJob).filter(models.AnalysisJob.status == "processing").all()
@@ -107,25 +108,48 @@ def _fail_orphaned_jobs():
         db.close()
 
 
+def _clear_old_uploads():
+    # if the server died mid job its temp video is still sitting in the upload folder
+    # nothing is running yet at startup so anything in there is left over
+    for name in os.listdir(config.UPLOAD_DIR):
+        path = os.path.join(config.UPLOAD_DIR, name)
+        try:
+            if os.path.isfile(path):
+                os.remove(path)
+        except Exception as e:
+            logger.error(f"could not remove old upload {name}: {e}")
+
+
 @app.on_event("startup")
 def startup_event():
-    """pre-load the ONNX deepfake detection model into memory on server boot"""
+    """load the onnx deepfake model into memory when the server boots"""
     _fail_orphaned_jobs()
+    _clear_old_uploads()
     threading.Thread(target=visual_agent.load_model, daemon=True).start()
-    # wake the hosted generative-video detector (free Hugging Face Spaces sleep when idle)
+    # wake up the hosted generative video detector since free hugging face spaces sleep when idle
     threading.Thread(target=remote_detector.warm_up, daemon=True).start()
 
 
 @app.get("/health")
 @limiter.exempt
 def health_check():
-    """
-    health check endpoint hit by GitHub Actions keep-alive ping.
-    confirms the server is running and the ONNX model is loaded.
-    exempt from rate limiting so keep-alive pings are never blocked.
-    """
+    """health check for the github actions keep-alive ping, also says if the onnx model is loaded.
+    its exempt from rate limiting so the pings never get blocked"""
     model_loaded = visual_agent._onnx_session is not None
-    return {"status": "ok", "service": "VeriFrame API", "model_loaded": model_loaded}
+
+    # touch the database too. the keep-alive job hits this every 5 min, so supabase sees activity
+    # and doesnt pause the free project when nobody has used the site for a while
+    db_ok = True
+    db = database.SessionLocal()
+    try:
+        db.execute(text("SELECT 1"))
+    except Exception as e:
+        db_ok = False
+        logger.error(f"health check could not reach the database: {e}")
+    finally:
+        db.close()
+
+    return {"status": "ok", "service": "VeriFrame API", "model_loaded": model_loaded, "database": db_ok}
 
 
 @app.post("/auth/register", response_model=schemas.TokenResponse)
@@ -147,7 +171,7 @@ def register(request: Request, req: schemas.RegisterRequest, db: Session = Depen
     db.commit()
     db.refresh(user)
     
-    # generate JWT token
+    # make the jwt token
     access_token = auth.create_access_token(data={"sub": user.email})
     return {"access_token": access_token, "token_type": "bearer"}
 
@@ -168,11 +192,11 @@ def login(request: Request, req: schemas.LoginRequest, db: Session = Depends(dat
     return {"access_token": access_token, "token_type": "bearer"}
 
 
-# Swagger UI token URL endpoint
+# token route for the swagger ui login
 @app.post("/auth/swagger-token", response_model=schemas.TokenResponse)
 @limiter.limit("10/minute")
 def swagger_token(request: Request, form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(database.get_db)):
-    """Swagger-compatible OAuth2 password token flow"""
+    """same as login but takes the form data swagger sends"""
     user = db.query(models.User).filter(models.User.email == form_data.username).first()
     if not user or not auth.verify_password(form_data.password, user.password_hash):
         raise HTTPException(
@@ -185,13 +209,12 @@ def swagger_token(request: Request, form_data: OAuth2PasswordRequestForm = Depen
     return {"access_token": access_token, "token_type": "bearer"}
 
 
-# a 512MB host cannot hold several decoded videos plus the CV models at once, so analyses run one at a time
-# (extra uploads wait here with status "processing" instead of crashing the server)
+# a 512mb server cant hold a few decoded videos plus the cv models at once so we run one analysis at a time
+# extra uploads just wait here as "processing" instead of crashing the server
 _analysis_slot = threading.Semaphore(int(os.environ.get("MAX_CONCURRENT_ANALYSES", "1")))
 
 
-# worker function to run the deepfake analysis in the background
-# every queued analysis parks a worker thread while it waits, so unlimited uploads would freeze the whole server
+# every queued analysis holds a worker thread while it waits, so unlimited uploads would freeze the whole server
 MAX_PENDING_JOBS = int(os.environ.get("MAX_PENDING_JOBS", "6"))
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 _pending_jobs = 0
@@ -213,30 +236,33 @@ def _process_video(job_id: str, temp_path: str, meta: dict):
     try:
         logger.info(f"background processing started for job {job_id}...")
         
-        # 1. grab sample keyframes from the video and resize them in memory
+        # 1. grab some keyframes from the video and resize them in memory
         job_start = time.perf_counter()
         frames = preprocessing.extract_frames(temp_path, interval=1.0, target_height=480, max_frames=6)
-        preprocessing.release_memory()  # hand the decoder's buffers back before the models and LLM run
+        preprocessing.release_memory()  # give the decoder memory back before the models and llm run
         extract_seconds = round(time.perf_counter() - job_start, 3)
         logger.info(f"extracted {len(frames)} keyframes for job {job_id}.")
+        if not frames:
+            # otherwise a broken or empty video goes through all the agents with nothing to look at
+            raise ValueError("could not read any frames from this video")
         
-        # 2. run langgraph multi-agent pipeline with video path for audio forensics
+        # 2. run the langgraph agents, we pass the video path too for the audio check
         pipeline_output = run_pipeline(frames, meta, job_id=job_id, video_path=temp_path)
         logger.info(f"langgraph pipeline completed for job {job_id}.")
         
-        # 4. load job to save outputs
+        # 3. load the job so we can save the results
         job = db.query(models.AnalysisJob).filter(models.AnalysisJob.id == job_id).first()
         if not job:
             logger.error(f"error: job {job_id} not found in database.")
             event_bus.mark_failed(job_id)
             return
 
-        # 5. thumbnails of the frames the LLM actually analysed, so every thumbnail has a real explanation
+        # 4. thumbnails of the frames the llm actually looked at so every thumbnail has a real explanation
         llm_ts = set(pipeline_output.get("llm_frame_timestamps") or [])
         if llm_ts:
             flagged_frames = [f for f in frames if round(f["timestamp"], 3) in llm_ts]
         else:
-            # LLM skipped or failed: show the same frames it would have been given
+            # llm got skipped or failed so just show the frames it would have gotten
             from agents.llm_agent import pick_suspicious_frames
             flagged_frames = pick_suspicious_frames(
                 pipeline_output.get("visual_flagged_frames", []),
@@ -251,7 +277,7 @@ def _process_video(job_id: str, temp_path: str, meta: dict):
             img_array = f["image"]
             
             h, w = img_array.shape[:2]
-            target_w = 480  # shown as cards on the results page
+            target_w = 480  # these show as cards on the results page
             target_h = int(h * (target_w / w))
             resized = cv2.resize(img_array, (target_w, target_h))
             
@@ -263,7 +289,7 @@ def _process_video(job_id: str, temp_path: str, meta: dict):
                 "image_b64": f"data:image/jpeg;base64,{img_base64}"
             })
             
-        # 6. update job metrics
+        # 5. save the results on the job
         job.status = "completed"
         job.completed_at = datetime.utcnow()
         job.final_verdict = pipeline_output.get("final_verdict", "UNCERTAIN")
@@ -285,6 +311,7 @@ def _process_video(job_id: str, temp_path: str, meta: dict):
         logger.error(f"error processing video for job {job_id}: {e}", exc_info=True)
         event_bus.mark_failed(job_id)
         try:
+            db.rollback()  # if the error came from a db commit the session is stuck until we roll back
             job = db.query(models.AnalysisJob).filter(models.AnalysisJob.id == job_id).first()
             if job:
                 job.status = "failed"
@@ -308,12 +335,11 @@ def _process_video(job_id: str, temp_path: str, meta: dict):
 @limiter.limit("5/minute")
 def upload_video(
     request: Request,
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(auth.get_current_user)
 ):
-    """upload video file to queue for deepfake analysis"""
+    """upload a video and queue it for analysis"""
     
     ext = os.path.splitext(file.filename)[1].lower().replace(".", "")
     allowed = ["mp4", "avi", "mov", "webm"]
@@ -334,7 +360,7 @@ def upload_video(
 
     import uuid
     job_uuid = str(uuid.uuid4())
-    # the stored name is generated here, so a client filename like "../../x" can never choose where the file goes
+    # we make the filename ourselves so a client filename like "../../x" cant choose where the file goes
     temp_filepath = os.path.join(config.UPLOAD_DIR, f"{job_uuid}.{ext}")
 
     try:
@@ -368,37 +394,51 @@ def upload_video(
             detail="Could not process the uploaded video."
         )
         
-    # initialize SSE event bus for this job
+    # set up the sse event bus for this job
     event_bus.init_job(job_uuid)
 
-    job = models.AnalysisJob(
-        id=job_uuid,
-        user_id=current_user.id,
-        status="processing",
-        video_filename=os.path.basename((file.filename or "video").replace("\\", "/"))[-120:],
-        duration=meta.get("duration", 0.0)
-    )
-    db.add(job)
-    db.commit()
-    db.refresh(job)
-    
-    background_tasks.add_task(process_video_task, job.id, temp_filepath, meta)
-    
+    try:
+        job = models.AnalysisJob(
+            id=job_uuid,
+            user_id=current_user.id,
+            status="processing",
+            video_filename=os.path.basename((file.filename or "video").replace("\\", "/"))[-120:],
+            duration=meta.get("duration", 0.0)
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+    except Exception:
+        # if the job never saves the worker never starts so we have to give the queue slot back here
+        logger.exception("could not save job %s", job_uuid)
+        db.rollback()
+        if os.path.exists(temp_filepath):
+            os.remove(temp_filepath)
+        with _pending_lock:
+            _pending_jobs -= 1
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not start the analysis. Please try again."
+        )
+
+    # using our own thread instead of fastapi background tasks because those dont run if the browser
+    # disconnects before the response is sent, and then the job would be stuck on "processing"
+    worker = threading.Thread(target=process_video_task, args=(job.id, temp_filepath, meta), daemon=True)
+    worker.start()
+
     return job
 
 
 @app.get("/stream/{job_id}")
 async def stream_job_events(job_id: str):
-    """
-    Server-Sent Events (SSE) endpoint to stream real-time multi-agent execution events to the frontend.
-    """
+    """sse endpoint that streams the live agent events to the frontend"""
     import asyncio
 
     async def event_generator():
         last_index = 0
         while True:
             if not event_bus.has_job(job_id):
-                # unknown job (e.g. server restarted): close instead of streaming forever; client falls back to polling
+                # unknown job, like after a server restart. just close it instead of streaming forever and the client goes back to polling
                 yield f"data: {json.dumps({'agent': 'System', 'message': 'Live event stream unavailable for this job.'})}\n\n"
                 break
 
@@ -431,7 +471,7 @@ def get_analysis(
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(auth.get_current_user)
 ):
-    """retrieve analysis report by job ID"""
+    """get the analysis report for a job"""
     job = db.query(models.AnalysisJob).filter(models.AnalysisJob.id == job_id).first()
     if not job:
         raise HTTPException(
@@ -439,14 +479,14 @@ def get_analysis(
             detail="Analysis job not found"
         )
         
-    # verify ownership
+    # make sure this job belongs to the user
     if job.user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to view this analysis report"
         )
         
-    # parse the text JSON database fields back to dictionaries
+    # the db stores these as json text so turn them back into dicts
     report_dict = json.loads(job.report_json) if job.report_json else None
     thumbnails = json.loads(job.flagged_frame_thumbnails) if job.flagged_frame_thumbnails else None
     
@@ -471,7 +511,7 @@ def get_report_pdf(
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(auth.get_current_user)
 ):
-    """export analysis report as a PDF file"""
+    """download the report as a pdf"""
     job = db.query(models.AnalysisJob).filter(models.AnalysisJob.id == job_id).first()
     if not job:
         raise HTTPException(
@@ -479,7 +519,7 @@ def get_report_pdf(
             detail="Analysis job not found"
         )
         
-    # verify ownership
+    # make sure this job belongs to the user
     if job.user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -492,14 +532,11 @@ def get_report_pdf(
             detail=f"Report cannot be generated while job is in status: {job.status}"
         )
         
-    # unpack report
     report_dict = json.loads(job.report_json) if job.report_json else {}
     
-    # generate PDF bytes
     pdf_data = report.generate_pdf(report_dict)
     
-    # check if weasyprint returned fallback html or actual pdf
-    # weasyprint returns PDF starting with %PDF
+    # weasyprint might fail and give us html instead, a real pdf starts with %PDF
     is_pdf = pdf_data.startswith(b"%PDF")
     media_type = "application/pdf" if is_pdf else "text/html"
     filename = f"veriframe_report_{job_id}.pdf" if is_pdf else f"veriframe_report_{job_id}.html"

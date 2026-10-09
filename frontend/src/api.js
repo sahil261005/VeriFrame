@@ -1,13 +1,13 @@
 import axios from 'axios';
 
-// configure backend base url
+// backend url, uses localhost if the env var isnt set
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 const api = axios.create({
   baseURL: API_URL,
 });
 
-// automatically attach JWT bearer token to requests if it exists in localstorage
+// add the jwt token to every request if we have one saved
 api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('token');
@@ -21,7 +21,7 @@ api.interceptors.request.use(
   }
 );
 
-// auto handle expired or invalid credentials
+// if the token is expired or bad, log out and go to the login page
 api.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -34,7 +34,7 @@ api.interceptors.response.use(
   }
 );
 
-// api service calls
+// api calls
 export const authService = {
   async login(email, password) {
     const response = await api.post('/auth/login', { email, password });

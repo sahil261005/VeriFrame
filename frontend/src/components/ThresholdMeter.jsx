@@ -1,5 +1,5 @@
-// score bar marked with the consensus engine's real cut-offs:
-// below 0.30 can be AUTHENTIC, 0.30-0.48 is UNCERTAIN, 0.48 and above is MANIPULATED
+// score bar with the same cutoffs the consensus engine uses
+// under 0.30 can be AUTHENTIC, 0.30 to 0.48 is UNCERTAIN, 0.48 and up is MANIPULATED
 const CUTS = [0.3, 0.48];
 
 function ThresholdMeter({ score, color, compact = false }) {

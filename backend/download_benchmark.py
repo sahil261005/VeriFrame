@@ -1,12 +1,12 @@
 """
-builds the 50-video evaluation set used with evaluate_pipeline.py, from free public Hugging Face datasets:
+builds the 50 video eval set for evaluate_pipeline.py from free public hugging face datasets
 
   AI-generated (25)  34data/gen-videos-{sora2, veo3, kling, wan2}   clips from Sora 2, Veo 3, Kling, Wan 2
   real HD (12)       nkp37/OpenVid-1M (OpenVidHD, CC-BY-4.0)        real-world web footage
   real low-res (13)  sayakpaul/ucf101-subset (UCF101)               real action clips, 320x240
 
-single clips are pulled out of the large remote zips with HTTP range requests, so only ~150MB is downloaded.
-selection is seeded, so re-running gives the same 50 videos.
+it pulls single clips out of the big remote zips with http range requests so only about 150mb gets downloaded.
+the selection is seeded so running it again gives the same 50 videos
 
     pip install huggingface_hub remotezip
     python download_benchmark.py                # writes benchmark/ and benchmark/labels.json
@@ -24,7 +24,7 @@ OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "benchmark")
 SEED = 0
 VIDEO_EXT = (".mp4", ".mov", ".webm", ".avi")
 
-AI_SOURCES = {  # category -> (zip url, how many clips)
+AI_SOURCES = {  # category -> zip url and how many clips to take
     "ai_sora2": ("https://huggingface.co/datasets/34data/gen-videos-sora2/resolve/main/data_001.zip", 7),
     "ai_veo3": ("https://huggingface.co/datasets/34data/gen-videos-veo3/resolve/main/data_001.zip", 6),
     "ai_kling": ("https://huggingface.co/datasets/34data/gen-videos-kling/resolve/main/data_001.zip", 6),

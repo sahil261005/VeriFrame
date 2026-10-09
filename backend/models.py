@@ -33,7 +33,7 @@ class AnalysisJob(Base):
     confidence = Column(Float, nullable=True)
     is_partial_analysis = Column(Boolean, default=False)
 
-    # report data stored as serialized JSON strings for SQLite compatibility
+    # report data is saved as json strings so it works with sqlite too
     report_json = Column(Text, nullable=True)
     flagged_frame_thumbnails = Column(Text, nullable=True)
 

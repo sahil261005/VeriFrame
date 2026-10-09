@@ -31,7 +31,7 @@ function Register() {
         if (typeof detail === 'string') {
           setError(detail);
         } else if (Array.isArray(detail)) {
-          // Format validation errors list cleanly
+          // validation errors come back as a list so join them into one line
           setError(detail.map(e => e.msg).join(', '));
         } else {
           setError(JSON.stringify(detail));

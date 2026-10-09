@@ -9,12 +9,12 @@ import config
 from database import get_db
 import models
 
-# oauth2 scheme definition. tokenUrl points to our login route
+# oauth2 scheme, tokenUrl points to our login route
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """verify password matches hashed version"""
+    """check the password matches the hash"""
     try:
         return bcrypt.checkpw(
             plain_password.encode("utf-8"),
@@ -32,7 +32,7 @@ def get_password_hash(password: str) -> str:
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    """generate a JWT access token"""
+    """make a jwt access token"""
     to_encode = data.copy()
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
@@ -45,7 +45,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
 
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> models.User:
-    """fastapi dependency to validate jwt and load the user"""
+    """fastapi dependency that checks the jwt and loads the user"""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",

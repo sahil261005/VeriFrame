@@ -6,20 +6,17 @@ logger = logging.getLogger(__name__)
 
 def reflect_on_analysis(llm_score, frame_explanations, llm_reasoning):
     """
-    reviews the LLM agent's output for internal contradictions and score-reasoning misalignment.
-    
-    checks performed:
-    1. score-reasoning alignment: does the numerical score match the text sentiment?
-    2. cross-frame consistency: do frame explanations contradict each other?
-    3. coverage check: are there frames with empty or missing explanations?
-    
-    returns a dict with needs_correction (bool) and correction_prompt (str).
+    looks over what the llm said and checks if it contradicts itself.
+    1. does the score match what the text says
+    2. do the frame explanations disagree with each other
+    3. are any frame explanations empty or missing
+    returns a dict with needs_correction and correction_prompt
     """
     issues_found = []
 
-    # check 1: score-reasoning alignment
-    # if score is high (> 0.7) but reasoning text says "authentic" or "real", thats contradictory
-    # if score is low (< 0.3) but reasoning says "fake" or "manipulated", also contradictory
+    # check 1: does the score match the reasoning
+    # score above 0.7 but the text says "authentic" or "real" is a contradiction
+    # score below 0.3 but the text says "fake" or "manipulated" is also one
     all_explanation_text = " ".join(frame_explanations.values()).lower()
 
     authentic_words = ["authentic", "genuine", "real camera", "no manipulation", "appears real", "naturally captured"]
@@ -40,9 +37,8 @@ def reflect_on_analysis(llm_score, frame_explanations, llm_reasoning):
             f"mention 'manipulated', 'fake', or 'AI-generated'. The score and reasoning conflict."
         )
 
-    # check 2: cross-frame consistency
-    # look for frames where one says "lighting is natural" and another says "lighting is artificial"
-    # on what appears to be the same subject
+    # check 2: do frames disagree with each other
+    # like one frame says the lighting is natural and another says its artificial
     lighting_natural = False
     lighting_artificial = False
     texture_natural = False
@@ -72,7 +68,7 @@ def reflect_on_analysis(llm_score, frame_explanations, llm_reasoning):
             "regions or is consistently suspicious."
         )
 
-    # check 3: missing/empty explanations
+    # check 3: missing or empty explanations
     empty_count = 0
     for ts, explanation in frame_explanations.items():
         if not explanation or len(explanation.strip()) < 10:
@@ -86,7 +82,7 @@ def reflect_on_analysis(llm_score, frame_explanations, llm_reasoning):
                 f"Provide detailed analysis for each frame."
             )
 
-    # build the correction prompt if issues were found
+    # if we found problems, build a prompt telling the llm what to fix
     needs_correction = len(issues_found) > 0
 
     if needs_correction:

@@ -1,7 +1,7 @@
 import os
 
-# LangSmith tracing stays off however this module is imported (server, benchmark or a one-off script): it copies
-# every node's state, including decoded video frames, and uploads it. main.py and evaluate_pipeline.py do the same.
+# turn off langsmith tracing no matter how this file gets imported, otherwise it uploads every nodes state
+# including all the decoded video frames. main.py and evaluate_pipeline.py do this too
 for _var in ("LANGCHAIN_TRACING_V2", "LANGCHAIN_TRACING", "LANGSMITH_TRACING"):
     os.environ[_var] = "false"
 for _var in ("LANGCHAIN_API_KEY", "LANGSMITH_API_KEY"):
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 def visual_node(state: VeriFrameState) -> dict:
     """
-    node for running visual analysis. checks deepfake classification + noise.
+    visual agent node, runs the deepfake classifier and noise check
     """
     frames = state.get("frames", [])
     status = dict(state.get("agent_status", {}))
@@ -34,8 +34,8 @@ def visual_node(state: VeriFrameState) -> dict:
     if job_id:
         event_bus.publish_event(job_id, "Visual Forensics Agent", "Inspecting high-frequency noise variance and spatial artifacts...")
 
-    # a validly signed C2PA "AI-generated" declaration already fixes the verdict at >= 0.95 (synthesis), so the
-    # face-swap ViT (the slowest CPU step, ~20 s on a fractional-CPU host) cannot change the outcome; skip it
+    # if theres a valid signed C2PA saying its AI generated, synthesis already sets it to >= 0.95.
+    # the face swap ViT is the slowest step (~20s on our small cpu) and cant change that, so skip it
     provenance = state.get("metadata", {}).get("provenance", {})
     if provenance.get("c2pa_ai_generated") and provenance.get("c2pa_signature_valid"):
         status["visual"] = "skipped"
@@ -49,7 +49,7 @@ def visual_node(state: VeriFrameState) -> dict:
         if pipe == "heuristic_fallback" or visual_agent.used_heuristics_only(all_results):
             status["visual"] = "fallback"
         elif visual_agent.no_faces_found(all_results):
-            # face-swap classifier has nothing to judge; drop it from the consensus instead of voting "real"
+            # no faces so the face swap model has nothing to say, leave it out instead of voting "real"
             status["visual"] = "skipped"
         else:
             status["visual"] = "success"
@@ -83,7 +83,7 @@ def visual_node(state: VeriFrameState) -> dict:
 
 def temporal_node(state: VeriFrameState) -> dict:
     """
-    node for running temporal analysis. checks optical flow + facial landmark shifts.
+    temporal agent node, checks optical flow and face landmark jitter
     """
     frames = state.get("frames", [])
     status = dict(state.get("agent_status", {}))
@@ -94,7 +94,7 @@ def temporal_node(state: VeriFrameState) -> dict:
 
     try:
         score, flagged_times, flow_res, face_res = temporal_agent.run_temporal_analysis(frames)
-        # too few consecutive frames to measure anything (e.g. very short clips): don't vote "consistent"
+        # really short clips dont have enough frames to measure, so skip instead of saying "consistent"
         status["temporal"] = "success" if (flow_res or face_res) else "skipped"
         
         if job_id:
@@ -127,7 +127,7 @@ def temporal_node(state: VeriFrameState) -> dict:
 
 def audio_node(state: VeriFrameState) -> dict:
     """
-    node for running audio analysis: spectral frequency cutoffs + lip-sync correlation.
+    audio agent node, checks frequency cutoffs and lip sync
     """
     video_path = state.get("video_path", "")
     frames = state.get("frames", [])
@@ -172,8 +172,8 @@ def audio_node(state: VeriFrameState) -> dict:
 
 def generative_node(state: VeriFrameState) -> dict:
     """
-    node for the generative-video detector: scores whole frames for AI-generation artifacts
-    (the face-swap ViT in visual_node cannot see Sora/Kling/Runway-style footage).
+    generative agent node, scores whole frames for AI generated stuff.
+    the face swap ViT in visual_node cant catch sora/kling/runway videos so we need this
     """
     frames = state.get("frames", [])
     status = dict(state.get("agent_status", {}))
@@ -217,9 +217,8 @@ def generative_node(state: VeriFrameState) -> dict:
 
 def router_node(state: VeriFrameState) -> dict:
     """
-    conditional router node. inspects visual and temporal scores and decides
-    how many frames to send to the LLM agent. always routes to LLM for
-    multi-agent consensus - never skips it.
+    router node, looks at the visual and temporal scores and decides how many
+    frames to send to the llm. it always goes to the llm, never skips it
     """
     visual_score = state.get("visual_score", 0.0)
     temporal_score = state.get("temporal_score", 0.0)
@@ -228,15 +227,15 @@ def router_node(state: VeriFrameState) -> dict:
 
     logger.info(f"Router check: visual_score={visual_score}, temporal_score={temporal_score}")
 
-    # if the visual model did not produce a real verdict (fallback/skipped/failed), use 4 frames for safety
+    # if the visual model didnt really run (fallback, skipped or failed) send 4 frames to be safe
     if status.get("visual") != "success":
         decision = "llm_extended"
         frame_count = 4
         reason = f"Visual agent status '{status.get('visual', 'unknown')}'. Evaluating 4 keyframes with LLM."
-    # if visual and temporal both have clear high confidence (>0.85) or both clear low (<0.15)
+    # visual and temporal both clearly high or both clearly low
     elif (visual_score > 0.85 and temporal_score > 0.60) or (visual_score < 0.15 and temporal_score < 0.15):
-        # minimum 3 frames: the face-swap model cannot see fully AI-generated video, so its "clean"
-        # verdict is not a reason to give the LLM (the main AI-video detector) less evidence
+        # still at least 3 frames. the face swap model cant see fully AI generated videos so a "clean"
+        # result from it doesnt mean the llm (our main AI video detector) should get fewer frames
         decision = "llm_fast_consensus"
         frame_count = 3
         reason = "Strong CV agreement detected. Running 3-keyframe LLM verification."
@@ -257,7 +256,7 @@ def router_node(state: VeriFrameState) -> dict:
 
 
 def route_decision_edge(state: VeriFrameState) -> str:
-    """conditional edge selector for router_node"""
+    """picks where to go after router_node"""
     decision = state.get("route_decision", "llm_normal")
     if decision == "skip_llm":
         return "synthesis"
@@ -266,10 +265,10 @@ def route_decision_edge(state: VeriFrameState) -> str:
 
 def llm_node(state: VeriFrameState) -> dict:
     """
-    node for running ReAct LLM vision model with tool execution on suspicious frames.
+    llm node, runs the vision model with tools on the most suspicious frames
     """
     frames = state.get("frames", [])
-    # frames either image detector found most suspicious go to the LLM first
+    # the most suspicious frames from either image detector go to the llm first
     visual_flagged = sorted(
         state.get("visual_flagged_frames", []) + _generative_result(state, wait=False).get("generative_flagged_frames", []),
         key=lambda f: f.get("fake_confidence", 0.0), reverse=True
@@ -290,7 +289,7 @@ def llm_node(state: VeriFrameState) -> dict:
     audio_details = state.get("audio_details", {})
     has_audio = state.get("has_audio", False)
 
-    # token counts of every API call made in this run (kept even if the node fails afterwards)
+    # token counts for every api call in this run, we keep them even if the node fails later
     usage = {}
     try:
         suspicious = llm_agent.pick_suspicious_frames(visual_flagged, temporal_flagged, frames, max_count=max_count)
@@ -347,8 +346,8 @@ def llm_node(state: VeriFrameState) -> dict:
 
 def reflection_node(state: VeriFrameState) -> dict:
     """
-    reflection node: reviews LLM reasoning and scores for internal contradictions.
-    triggers a self-correction loop back to the LLM node if needed (max 2 iterations).
+    reflection node, checks if the llm contradicted itself.
+    if it did we loop back to the llm node, max 2 times
     """
     llm_score = state.get("llm_score", 0.0)
     frame_explanations = state.get("frame_explanations", {})
@@ -359,12 +358,11 @@ def reflection_node(state: VeriFrameState) -> dict:
     if job_id:
         event_bus.publish_event(job_id, "Agent Reflection Node", f"Auditing agent reasoning for internal consistency (Iteration {reflection_count + 1}/2)...")
 
-    # run reflection audit
     reflection_res = reflection_agent.reflect_on_analysis(llm_score, frame_explanations, llm_reasoning)
     needs_correction = reflection_res["needs_correction"]
     prompt = reflection_res["correction_prompt"]
 
-    # enforce max 2 reflection iterations
+    # only loop 2 times max
     if needs_correction and reflection_count < 2:
         logger.info(f"Reflection loop triggered (iteration {reflection_count + 1})")
         if job_id:
@@ -389,22 +387,22 @@ def reflection_node(state: VeriFrameState) -> dict:
 
 
 def reflection_edge(state: VeriFrameState) -> str:
-    """conditional edge selector for reflection_node"""
+    """picks where to go after reflection_node"""
     if state.get("needs_correction", False):
-        return "llm"  # loop back to LLM node (Cyclic Graph!)
+        return "llm"  # go back to the llm node
     return "synthesis"
 
 
 def synthesis_node(state: VeriFrameState) -> dict:
     """
-    node for synthesis. computes the final consensus verdict and compiles the report.
+    synthesis node, works out the final verdict and builds the report
     """
     visual_score = state.get("visual_score", 0.0)
     temporal_score = state.get("temporal_score", 0.0)
     audio_score = state.get("audio_score", 0.0)
     has_audio = state.get("has_audio", False)
     llm_score = state.get("llm_score", 0.0)
-    # collect the background generative detector (usually already finished while the LLM was running)
+    # get the generative result from the background, its usually done by now since the llm took a while
     generative = _generative_result(state, wait=True)
     generative_score = generative.get("generative_score", 0.0)
     status = {**state.get("agent_status", {}), **generative.get("agent_status", {})}
@@ -459,13 +457,13 @@ def synthesis_node(state: VeriFrameState) -> dict:
 from concurrent.futures import ThreadPoolExecutor
 
 
-# the AI-generated-video detector runs on the hosted service and is the slowest CV step. it does not need to
-# block the LLM stage (~4-5s), so it runs in the background and the synthesis node collects it at the end.
+# the generative detector is the slowest cv step but the llm (~4-5s) doesnt need it,
+# so we run it in the background and synthesis picks it up at the end
 _background = ThreadPoolExecutor(max_workers=2)
 
 
 def _generative_result(state, wait):
-    """result dict of the background generative node; with wait=False returns {} if it is not finished yet."""
+    """gets the background generative result, with wait=False it returns {} if its not done yet"""
     future = state.get("generative_future")
     if future is None or (not wait and not future.done()):
         return {}
@@ -474,9 +472,8 @@ def _generative_result(state, wait):
 
 def cv_parallel_node(state: VeriFrameState) -> dict:
     """
-    runs Visual Forensics, Temporal Consistency, and Audio Forensics simultaneously in parallel.
-    audio takes ~0.4s and finishes while visual is running, adding 0s to overall wait.
-    the generative-video detector is started alongside them but collected later (see synthesis_node).
+    runs visual, temporal and audio at the same time. audio only takes ~0.4s so it finishes
+    while visual is still going. generative starts here too but synthesis_node collects it later
     """
     generative_future = _background.submit(_timed("generative", generative_node), state)
 
@@ -507,7 +504,7 @@ def cv_parallel_node(state: VeriFrameState) -> dict:
 
 
 def _timed(name, node_fn):
-    """wraps a node so its wall time is added to state["timings"][name] (summed if the node re-runs)."""
+    """wraps a node and adds how long it took to state["timings"][name], adds up if it runs again"""
     def wrapper(state):
         start = time.perf_counter()
         result = node_fn(state)
@@ -517,21 +514,21 @@ def _timed(name, node_fn):
     return wrapper
 
 
-# assemble the state graph
+# build the graph
 workflow = StateGraph(VeriFrameState)
 
-# add node functions
+# add the nodes
 workflow.add_node("cv_parallel", _timed("cv_parallel", cv_parallel_node))
 workflow.add_node("router", _timed("router", router_node))
 workflow.add_node("llm", _timed("llm", llm_node))
 workflow.add_node("reflection", _timed("reflection", reflection_node))
 workflow.add_node("synthesis", _timed("synthesis", synthesis_node))
 
-# build execution flow with true concurrent CV start and conditional routing
+# start with the cv agents in parallel, then the router
 workflow.add_edge(START, "cv_parallel")
 workflow.add_edge("cv_parallel", "router")
 
-# conditional edge from router: either skip LLM straight to synthesis, or route to LLM
+# router either goes to the llm or skips straight to synthesis
 workflow.add_conditional_edges(
     "router",
     route_decision_edge,
@@ -541,28 +538,27 @@ workflow.add_conditional_edges(
     }
 )
 
-# LLM passes output to Reflection node
+# llm output goes to reflection
 workflow.add_edge("llm", "reflection")
 
-# conditional edge from reflection: either loop back to LLM (if self-correction needed) or proceed to synthesis
+# reflection either loops back to the llm to fix things or moves on to synthesis
 workflow.add_conditional_edges(
     "reflection",
     reflection_edge,
     {
-        "llm": "llm",          # CYCLIC REFLECTION LOOP!
+        "llm": "llm",          # this is the reflection loop
         "synthesis": "synthesis"
     }
 )
 
 workflow.add_edge("synthesis", END)
 
-# compile graph
 compiled_graph = workflow.compile()
 
 
 def run_pipeline(frames, metadata, job_id=None, video_path=""):
     """
-    outer wrapper to trigger the compiled langgraph workflow.
+    runs the whole langgraph pipeline on a video
     """
     initial_state = {
         "video_path": video_path or "",
@@ -576,7 +572,7 @@ def run_pipeline(frames, metadata, job_id=None, video_path=""):
     start = time.perf_counter()
     final_state = compiled_graph.invoke(initial_state)
 
-    # latency and LLM cost for this video, shown in the report and collected by evaluate_pipeline.py
+    # how long it took and what the llm cost, shows up in the report and evaluate_pipeline.py reads it
     usage = final_state.get("llm_usage", {}) or {}
     performance = {
         "pipeline_seconds": round(time.perf_counter() - start, 3),

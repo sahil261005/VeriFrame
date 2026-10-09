@@ -9,8 +9,8 @@ logger = logging.getLogger(__name__)
 
 def extract_audio_wav(video_path, output_wav):
     """
-    extracts audio from video to a 16kHz mono WAV file using ffmpeg for quick analysis.
-    returns True if audio was successfully extracted, False if video has no audio.
+    uses ffmpeg to pull the audio out as a 16kHz mono wav.
+    returns True if it worked, False if the video has no audio
     """
     try:
         cmd = [
@@ -28,23 +28,23 @@ def extract_audio_wav(video_path, output_wav):
 
 def analyze_spectral_cutoffs(audio_samples, sample_rate=16000):
     """
-    checks for sharp low-pass frequency cutoffs common in AI voice models (ElevenLabs, Bark).
-    real recordings contain natural ambient hiss and breath above 6.5kHz.
+    AI voices like elevenlabs or bark often have a sharp cutoff in the high frequencies.
+    real recordings still have some hiss and breath above 6.5kHz
     """
     if len(audio_samples) < sample_rate:
         return 0.2, "Audio too short for spectral analysis."
 
-    # fast fourier transform to get frequency energy
+    # fft to get the energy at each frequency
     fft_vals = np.abs(np.fft.rfft(audio_samples))
     freqs = np.fft.rfftfreq(len(audio_samples), 1.0 / sample_rate)
 
     total_energy = float(np.sum(fft_vals)) + 1e-6
-    # check energy in high-frequency band (> 6500 Hz)
+    # how much energy is above 6500 Hz
     high_freq_mask = freqs > 6500
     high_freq_energy = float(np.sum(fft_vals[high_freq_mask]))
     high_freq_ratio = high_freq_energy / total_energy
 
-    # AI TTS often has an abrupt cutoff with virtually zero high-frequency energy (< 0.015)
+    # AI tts usually cuts off hard and has almost no high freq energy, under 0.015
     if high_freq_ratio < 0.015:
         score = 0.80
         desc = "Unnatural high-frequency spectral cutoff detected (< 6.5kHz). Characteristic of synthetic TTS vocoders."
@@ -60,7 +60,7 @@ def analyze_spectral_cutoffs(audio_samples, sample_rate=16000):
 
 def analyze_voice_cadence(audio_samples, sample_rate=16000):
     """
-    checks for robotic, unnaturally flat energy distribution (lack of natural human breath pauses).
+    checks if the voice volume is too flat and robotic, like no breathing pauses
     """
     chunk_size = int(sample_rate * 0.1)  # 100ms chunks
     if len(audio_samples) < chunk_size * 5:
@@ -77,8 +77,8 @@ def analyze_voice_cadence(audio_samples, sample_rate=16000):
     mean_rms = float(np.mean(rms_arr)) + 1e-6
     var_rms = float(np.var(rms_arr / mean_rms))
 
-    # Real human speech has dynamic syllable pauses (var_rms > 0.35)
-    # Synthetic flat voice has very low pause variance
+    # real speech has pauses between syllables so var_rms is usually above 0.35
+    # a fake flat voice has really low variance
     if var_rms < 0.10 and mean_rms > 100:
         score = 0.75
         desc = "Unnaturally flat speech volume envelope without natural breathing micro-pauses."
@@ -91,8 +91,8 @@ def analyze_voice_cadence(audio_samples, sample_rate=16000):
 
 def check_lip_sync(audio_samples, sample_rate, frames):
     """
-    compares audio volume spikes against mouth open/close keyframes.
-    if mouth stays closed while loud audio is playing, flags desync anomaly.
+    compares loud parts of the audio with the keyframes.
+    if the frame looks static while the audio is loud we count it as desync
     """
     if not frames or len(audio_samples) < sample_rate:
         return 0.2, "Not enough frames for lip-sync correlation."
@@ -102,7 +102,7 @@ def check_lip_sync(audio_samples, sample_rate, frames):
 
     for f in frames:
         ts = f.get("timestamp", 0.0)
-        # sample 200ms audio window around the frame timestamp
+        # take 200ms of audio around the frame
         center_sample = int(ts * sample_rate)
         start = max(0, center_sample - int(sample_rate * 0.1))
         end = min(len(audio_samples), center_sample + int(sample_rate * 0.1))
@@ -110,11 +110,10 @@ def check_lip_sync(audio_samples, sample_rate, frames):
         if end > start:
             window = audio_samples[start:end]
             rms = np.sqrt(np.mean(window.astype(np.float32) ** 2))
-            is_audio_active = rms > 300  # active speech volume threshold
+            is_audio_active = rms > 300  # loud enough to count as speech
 
-            # check if noise variance or frame indicates face activity
             total_checked += 1
-            # (Simple heuristic check: flags if audio is loud but frame is static)
+            # simple check, flag it if audio is loud but the frame is static
             if is_audio_active and f.get("noise_variance", 0) < 0.00002:
                 desync_count += 1
 
@@ -126,8 +125,7 @@ def check_lip_sync(audio_samples, sample_rate, frames):
 
 def run_audio_analysis(video_path, frames):
     """
-    main entry point for the Audio Forensics Agent.
-    returns (score, observations, has_audio).
+    main function for the audio agent, returns (score, details, has_audio)
     """
     if not video_path or not os.path.exists(video_path):
         return 0.0, {"summary": "No video file available for audio extraction.", "has_audio": False}, False
@@ -150,7 +148,7 @@ def run_audio_analysis(video_path, frames):
             raw_bytes = wf.readframes(n_frames)
             audio_samples = np.frombuffer(raw_bytes, dtype=np.int16)
 
-        # run 3 simple mathematical checks
+        # run the 3 checks
         spectral_score, spectral_desc = analyze_spectral_cutoffs(audio_samples, sample_rate)
         cadence_score, cadence_desc = analyze_voice_cadence(audio_samples, sample_rate)
         lipsync_score, lipsync_desc = check_lip_sync(audio_samples, sample_rate, frames)
@@ -174,7 +172,7 @@ def run_audio_analysis(video_path, frames):
         logger.error(f"Error analyzing audio: {e}", exc_info=True)
         return 0.0, {"summary": f"Audio processing error: {e}", "has_audio": False}, False
     finally:
-        # cleanup temporary wav file
+        # delete the temp wav
         if os.path.exists(wav_path):
             try:
                 os.remove(wav_path)

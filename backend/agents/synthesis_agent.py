@@ -1,5 +1,5 @@
 def compute_verdict(visual_score, temporal_score, llm_score, agent_status, metadata=None, audio_score=0.0, has_audio=False, generative_score=0.0):
-    # base weights across active forensic modalities
+    # starting weights for each agent
     if has_audio and agent_status.get("audio") == "success":
         base_weights = {
             "visual": 0.35,
@@ -43,8 +43,8 @@ def compute_verdict(visual_score, temporal_score, llm_score, agent_status, metad
                 "llm": 0.75
             }
     
-    # the generative-video detector is the agent aimed at fully AI-generated footage (Sora/Kling/Runway/Veo),
-    # which the face-swap visual model cannot see, so it takes the largest single share when it ran
+    # the generative detector is the only one that catches fully AI generated videos (sora, kling, runway, veo)
+    # the face swap model cant see those, so if it ran it gets the biggest weight
     if agent_status.get("generative") == "success":
         base_weights = {name: w * 0.55 for name, w in base_weights.items()}
         base_weights["generative"] = 0.45
@@ -65,7 +65,7 @@ def compute_verdict(visual_score, temporal_score, llm_score, agent_status, metad
             active_weights[name] = weight
             total_active_base_weight += weight
 
-    # no agent produced usable evidence: averaging zeros would wrongly report AUTHENTIC
+    # if no agent gave us anything, averaging zeros would say AUTHENTIC which is wrong
     if total_active_base_weight == 0.0:
         return "UNCERTAIN", 0.0, {}
 
@@ -77,11 +77,8 @@ def compute_verdict(visual_score, temporal_score, llm_score, agent_status, metad
     for name, weight in normalized_weights.items():
         final_confidence += scores[name] * weight
 
-    # Domain-specific detector alignment:
-    # 1. ViT model specializes in facial deepfake boundary artifacts (FaceForensics)
-    # 2. Gemini LLM Vision specializes in modern generative AI diffusion (Sora/Kling/Runway)
-    # If either specialized detector is confident (>= 0.55), elevate confidence to reflect detection.
-    # only trust a specialist's override when it actually ran its model (not heuristics/failed/skipped)
+    # the ViT is good at face swap edges (FaceForensics) and the llm vision is better at sora/kling/runway style videos
+    # if one of them is pretty sure (>= 0.55) we bump the confidence up, but only if it actually ran its model
     specialized = [score for name, score in (("visual", visual_score), ("llm", llm_score), ("generative", generative_score))
                    if agent_status.get(name) == "success"]
     max_specialized = max(specialized, default=0.0)
@@ -94,8 +91,8 @@ def compute_verdict(visual_score, temporal_score, llm_score, agent_status, metad
             diff = final_confidence - 0.5
             final_confidence = 0.5 + diff * robustness
 
-    # the file's own signed Content Credentials say a generative-AI tool produced it: that is direct evidence,
-    # stronger than any pixel-level detector, so it decides the verdict
+    # if the files signed content credentials say an AI tool made it, thats stronger than any detector
+    # so we just go with that
     if metadata and metadata.get("provenance", {}).get("c2pa_ai_generated"):
         final_confidence = max(final_confidence, 0.95)
 
@@ -106,8 +103,8 @@ def compute_verdict(visual_score, temporal_score, llm_score, agent_status, metad
     else:
         verdict = "UNCERTAIN"
 
-    # "AUTHENTIC" needs positive evidence against fully AI-generated footage, which the face-swap and motion
-    # checks cannot see: either the LLM ran, or the generative detector ran and found nothing at all
+    # face swap and motion checks cant spot fully AI generated videos, so only say AUTHENTIC
+    # if the llm ran or the generative detector ran and found basically nothing
     if verdict == "AUTHENTIC":
         llm_ok = agent_status.get("llm") == "success"
         generative_clear = agent_status.get("generative") == "success" and generative_score < 0.15

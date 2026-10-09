@@ -9,7 +9,7 @@ from PIL import Image
 import cv2
 from concurrent.futures import ThreadPoolExecutor
 
-# imported at startup rather than inside the first request: the import costs over a second on a fractional-CPU host
+# import this at startup, not on the first request, because it takes over a second on a small cpu server
 from google import genai
 from google.genai import types
 from agents.tools import TOOL_REGISTRY
@@ -18,17 +18,17 @@ logger = logging.getLogger(__name__)
 
 
 class LLMUnavailableError(Exception):
-    """raised when no LLM provider is configured, so the agent is skipped rather than scored"""
+    """raised when theres no llm api key set, so the agent gets skipped instead of scored"""
 
 
 _usage_lock = threading.Lock()
 
-# Groq fallback vision model. Groq retired Llama 4 Scout (404 "model does not exist"), so this is configurable;
-# qwen/qwen3.8-27b accepts images and follows the [SCORE: X.XX] format.
+# vision model for the groq fallback. groq removed llama 4 scout (it gave a 404) so now its an env var.
+# qwen/qwen3.8-27b takes images and sticks to the [SCORE: X.XX] format
 GROQ_VISION_MODEL = os.environ.get("GROQ_VISION_MODEL", "qwen/qwen3.8-27b")
 
-# USD per 1M tokens, from the provider's pricing page; set these on the server to get a cost per video.
-# left unset, token counts are still recorded but no dollar figure is computed.
+# price in USD per 1M tokens from the providers pricing page, set these to get a cost per video.
+# if they arent set we still count tokens but dont calculate the cost
 _PRICE_ENV = {
     "gemini": ("GEMINI_INPUT_USD_PER_M", "GEMINI_OUTPUT_USD_PER_M"),
     "groq": ("GROQ_INPUT_USD_PER_M", "GROQ_OUTPUT_USD_PER_M"),
@@ -36,7 +36,7 @@ _PRICE_ENV = {
 
 
 def _record_usage(usage, provider, input_tokens, output_tokens):
-    """adds one API call's token counts to the shared usage dict (Groq calls run in parallel threads)."""
+    """adds the token counts from one api call to the usage dict, locked because groq calls run in threads"""
     if usage is None:
         return
     with _usage_lock:
@@ -46,7 +46,7 @@ def _record_usage(usage, provider, input_tokens, output_tokens):
 
 
 def estimate_cost_usd(usage):
-    """dollar cost of the recorded token usage, or None if prices are not configured."""
+    """how much the tokens cost in dollars, None if the prices arent set"""
     total = 0.0
     priced = False
     for provider, (in_env, out_env) in _PRICE_ENV.items():
@@ -67,9 +67,9 @@ def _clamp_score(value):
 
 
 def pick_suspicious_frames(visual_flagged, temporal_flagged, all_frames, max_count=8):
-    # visual_flagged is sorted most-suspicious first; interleave it with temporal hits so
-    # truncation to max_count keeps the strongest evidence from both agents, then
-    # backfill with evenly spaced frames and return in chronological order
+    # visual_flagged is already sorted most suspicious first. we alternate it with the temporal ones
+    # so cutting to max_count keeps the best frames from both agents, then fill the rest with
+    # evenly spaced frames and sort by time
     by_ts = {round(f["timestamp"], 3): f for f in all_frames}
 
     def resolve(t):
@@ -121,12 +121,12 @@ def pick_suspicious_frames(visual_flagged, temporal_flagged, all_frames, max_cou
 
 
 def run_tools_for_frame(frame_data, all_frames=None, metadata=None):
-    # run our forensic tools on a single frame and collect results
-    # reuses precomputed noise variance to save 5+ seconds of redundant CPU calculations
+    # runs our tools on one frame and collects the results
+    # reuses the noise variance we already computed, saves 5+ seconds of cpu
     tool_results = {}
     tools_called = []
 
-    # 1. noise & edge tool (instant: reads precalculated noise_variance from frame)
+    # 1. noise tool, instant since it just reads noise_variance from the frame
     try:
         noise_var = frame_data.get("noise_variance")
         if noise_var is not None:
@@ -150,7 +150,7 @@ def run_tools_for_frame(frame_data, all_frames=None, metadata=None):
     except Exception as e:
         logger.warning(f"tool analyze_noise_pattern failed: {e}")
 
-    # 2. optical flow comparison tool (if all_frames provided)
+    # 2. optical flow tool, only if we have all_frames
     if all_frames and len(all_frames) > 1:
         try:
             res = TOOL_REGISTRY["compare_adjacent_frames"]["function"](frame_data, all_frames)
@@ -159,7 +159,7 @@ def run_tools_for_frame(frame_data, all_frames=None, metadata=None):
         except Exception as e:
             logger.warning(f"tool compare_adjacent_frames failed: {e}")
 
-    # 3. metadata check tool (if metadata provided)
+    # 3. metadata tool, only if we have metadata
     if metadata and "metadata" not in tool_results:
         try:
             res = TOOL_REGISTRY["check_metadata"]["function"](metadata)
@@ -172,14 +172,16 @@ def run_tools_for_frame(frame_data, all_frames=None, metadata=None):
 
 
 def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, all_frames=None, api_key=None, audio_details=None, usage=None):
-    # sends frames to Gemini 3.5 Flash-Lite for multi-image analysis and gets back a JSON verdict
+    # sends all the frames to gemini 3.5 flash-lite in one request and gets json back
 
-    client = genai.Client(api_key=api_key)
+    # need a timeout or a stuck gemini call blocks the only analysis slot forever.
+    # its 60s (value is in ms), after that we fall back to groq
+    client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=60000))
     contents = []
     tool_summaries = []
     all_tools_used = set()
 
-    # run tools on all frames at once using threads (they are independent so this is safe)
+    # run the tools on all frames at once with threads, they dont depend on each other
     workers = min(len(suspicious_frames), 6)
     with ThreadPoolExecutor(max_workers=workers) as pool:
         tool_results_list = list(pool.map(
@@ -191,7 +193,7 @@ def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, 
         ts = round(f["timestamp"], 3)
         all_tools_used.update(tools_called)
 
-        # 640px width keeps fine generation artifacts (text, hands, skin texture) visible; 384px smoothed them away
+        # 640px wide so small stuff like text, hands and skin texture is still visible, 384px blurred it out
         rgb = cv2.cvtColor(f["image"], cv2.COLOR_BGR2RGB)
         h, w = rgb.shape[:2]
         target_w = 640
@@ -208,7 +210,7 @@ def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, 
         contents.append(f"=== Frame #{idx + 1} at timestamp {ts}s ===")
         contents.append(pil_img)
 
-    # Append acoustic analysis findings if audio track was present
+    # add the audio results too if the video has audio
     if audio_details and audio_details.get("has_audio"):
         audio_text = (
             f"AUDIO / ACOUSTIC FORENSIC FINDINGS:\n"
@@ -257,7 +259,7 @@ def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, 
     contents.insert(0, system_prompt)
 
     try:
-        # use gemini-3.5-flash-lite for fast, high-accuracy multi-image reasoning (~2s)
+        # gemini-3.5-flash-lite is fast and accurate enough for this, takes about 2s
         gen_config = types.GenerateContentConfig(
             response_mime_type="application/json",
             temperature=0.1,
@@ -278,7 +280,7 @@ def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, 
         data = json.loads(response.text)
         overall_score = _clamp_score(data.get("overall_fake_score", 0.1))
         summary_reasoning = data.get("summary_reasoning", "Gemini analysis completed.")
-        # Gemini sometimes labels frames "1.333s"; keep plain timestamps like the Groq path so the UI can match them
+        # gemini sometimes writes "1.333s", strip the s so it matches the groq format and the UI can find the frame
         frame_explanations = {str(k).strip().rstrip("s").strip(): v for k, v in (data.get("frame_explanations") or {}).items()}
 
         tools_list = sorted(list(all_tools_used))
@@ -288,18 +290,18 @@ def analyze_with_gemini(suspicious_frames, reflection_prompt="", metadata=None, 
 
     except Exception as e:
         logger.error(f"Gemini API error: {e}")
-        # fallback to Groq if Gemini throws an error
+        # returning None makes it fall back to groq
         return None
 
 
 def process_single_groq_frame(f, client, all_frames, metadata, reflection_prompt, usage=None):
-    # helper for running one frame through Groq in parallel
+    # runs one frame through groq, gets called from the thread pool
     ts = round(f["timestamp"], 3)
     img_array = f["image"]
 
     tool_results, tools_called = run_tools_for_frame(f, all_frames=all_frames, metadata=metadata)
 
-    # resize to 384 for fast base64 encoding and transfer
+    # resize to 384 so the base64 image is smaller and uploads faster
     rgb = cv2.cvtColor(img_array, cv2.COLOR_BGR2RGB)
     h, w = rgb.shape[:2]
     small_rgb = cv2.resize(rgb, (384, max(1, int(h * (384 / w)))))
@@ -326,7 +328,7 @@ def process_single_groq_frame(f, client, all_frames, metadata, reflection_prompt
         "(0.00 is authentic, 1.00 is fully AI-generated/fake). Then, give a 2-sentence explanation."
     )
 
-    # None marks a failed call so it is excluded from the aggregate instead of counted as "authentic"
+    # None means the call failed, so we leave it out of the average instead of counting it as authentic
     score = None
     explanation = "Analysis failed for this frame."
 
@@ -346,7 +348,7 @@ def process_single_groq_frame(f, client, all_frames, metadata, reflection_prompt
         groq_usage = getattr(response, "usage", None)
         _record_usage(usage, "groq", getattr(groq_usage, "prompt_tokens", 0), getattr(groq_usage, "completion_tokens", 0))
         response_text = response.choices[0].message.content or ""
-        # reasoning models may prepend a <think>...</think> block; keep only the answer
+        # reasoning models can put a <think>...</think> block first, we only want the answer
         response_text = re.sub(r"<think>.*?</think>", "", response_text, flags=re.DOTALL).strip()
         explanation = response_text
 
@@ -366,7 +368,8 @@ def process_single_groq_frame(f, client, all_frames, metadata, reflection_prompt
 def analyze_with_groq(suspicious_frames, reflection_prompt="", metadata=None, all_frames=None, api_key=None, usage=None):
     # fallback: sends frames to Groq in parallel threads so we dont wait 10+ seconds sequentially
     from groq import Groq
-    client = Groq(api_key=api_key)
+    # default is 60s with 2 retries which can be 3 min per frame, so make it shorter
+    client = Groq(api_key=api_key, timeout=30, max_retries=1)
     frame_explanations = {}
     scores_list = []
     all_tools_used = set()
@@ -397,11 +400,11 @@ def analyze_with_groq(suspicious_frames, reflection_prompt="", metadata=None, al
 
 
 def analyze_with_llm(suspicious_frames, reflection_prompt="", metadata=None, all_frames=None, audio_details=None, usage=None):
-    # main entry point: tries Gemini first, falls back to Groq
+    # main function, tries gemini first and then groq
     if not suspicious_frames:
         return "No suspicious frames flagged for analysis", {}, 0.0, []
 
-    # Check for Gemini API key first
+    # check for the gemini key first
     gemini_key = os.environ.get("GEMINI_API_KEY")
     if gemini_key:
         try:
@@ -420,7 +423,7 @@ def analyze_with_llm(suspicious_frames, reflection_prompt="", metadata=None, all
         except Exception as e:
             logger.warning(f"Gemini failed, trying Groq fallback: {e}")
 
-    # Fallback to Groq
+    # otherwise use groq
     groq_key = os.environ.get("GROQ_API_KEY")
     if groq_key:
         logger.info(f"Running visual reasoning with Groq ({GROQ_VISION_MODEL})...")

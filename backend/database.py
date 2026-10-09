@@ -13,7 +13,9 @@ if is_sqlite:
         config.DATABASE_URL, connect_args={"check_same_thread": False}
     )
 else:
-    engine = create_engine(config.DATABASE_URL)
+    # supabase closes idle connections so we test each one before using it
+    # and swap it out after 5 min so a request never gets a dead connection
+    engine = create_engine(config.DATABASE_URL, pool_pre_ping=True, pool_recycle=300)
 
 # session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -33,6 +35,6 @@ def get_db():
 
 # helper to create all tables
 def create_tables():
-    # we import models here to ensure they register on Base metadata
+    # import models here so they get registered on Base metadata
     import models
     Base.metadata.create_all(bind=engine)

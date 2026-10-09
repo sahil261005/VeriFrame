@@ -3,9 +3,11 @@ numpy==2.0.2
 Pillow==11.3.0
 mediapipe==0.10.9
 langgraph==0.6.11
+# langgraph accepts any langchain-core version, so pin the one we tested with
+langchain-core==1.6.8
 groq==1.0.0
-google-genai>=0.1.1
-huggingface_hub>=0.20.0
+google-genai==2.29.0
+huggingface_hub==2.2.0
 onnxruntime==1.22.0
 python-dotenv==1.2.1
 fastapi==0.128.8
@@ -14,11 +16,11 @@ sqlalchemy==2.0.51
 psycopg2-binary==2.9.9
 python-multipart==0.0.20
 bcrypt==5.0.0
-python-jose[cryptography]
+python-jose[cryptography]==3.5.0
 weasyprint==66.0
 slowapi==0.1.10
 email-validator==2.2.0
 dnspython==2.6.1
-httpx>=0.27
+httpx==0.28.1
 # reads C2PA Content Credentials; wheels need python >= 3.10, skipped (check disabled) on older versions
-c2pa-python>=0.38; python_version >= "3.10"
+c2pa-python==0.38.0; python_version >= "3.10"

@@ -14,26 +14,23 @@ except ImportError:
 
 def analyze_noise_pattern(frame_data):
     """
-    tool: analyze_noise_pattern
-    description: Examines the high-frequency noise residual and edge sharpness of a video frame.
-    Real camera sensors produce natural noise variance (> 0.00010). AI generators produce
-    unnaturally smooth noise (< 0.00003), which is a strong indicator of synthetic content.
-    
-    Returns noise variance, laplacian variance (edge sharpness), and a risk assessment.
+    looks at the noise and edge sharpness of a frame.
+    real cameras usually have noise variance above 0.00010, AI frames are way smoother (under 0.00003).
+    returns noise variance, laplacian variance and a risk level
     """
     img = frame_data["image"]
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # compute laplacian variance (measures edge sharpness)
+    # laplacian variance tells us how sharp the edges are
     laplacian_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
-    # compute normalized high-frequency noise residual (0.0 to 1.0 scale)
+    # noise = image minus a blurred copy, on a 0 to 1 scale
     norm_gray = gray.astype(np.float32) / 255.0
     blurred = cv2.GaussianBlur(norm_gray, (5, 5), 0)
     noise = norm_gray - blurred
     noise_var = float(np.var(noise))
 
-    # assess risk level based on normalized noise variance
+    # pick a risk level from the noise
     if noise_var < 0.00003:
         risk = "high (unnaturally smooth noise, characteristic of AI generation)"
     elif noise_var < 0.00008:
@@ -59,10 +56,8 @@ def analyze_noise_pattern(frame_data):
 
 def check_face_landmarks(frame_data):
     """
-    tool: check_face_landmarks
-    description: Runs MediaPipe Face Mesh on a single frame to detect facial landmarks.
-    Returns key landmark positions (nose, eyes, chin) and checks for structural anomalies
-    like asymmetric face proportions that indicate face-swap or deepfake artifacts.
+    runs mediapipe face mesh on one frame and gets the nose, eyes and chin points.
+    also checks if the face is weirdly asymmetric which can mean a face swap
     """
     if not MEDIAPIPE_AVAILABLE:
         return {
@@ -74,7 +69,7 @@ def check_face_landmarks(frame_data):
     img = frame_data["image"]
     h, w = img.shape[:2]
     
-    # downscale for fast face detection
+    # make it smaller so face detection is faster
     small_w = 240
     small_h = int(h * (small_w / w))
     small_img = cv2.resize(img, (small_w, small_h))
@@ -97,19 +92,19 @@ def check_face_landmarks(frame_data):
         }
 
     landmarks = result.multi_face_landmarks[0]
-    # key landmarks: 1=nose tip, 33=left eye inner, 263=right eye inner, 152=chin
+    # landmark ids, 1 is nose tip, 33 left eye inner, 263 right eye inner, 152 chin
     key_indices = {"nose": 1, "left_eye": 33, "right_eye": 263, "chin": 152}
     points = {}
     for name, idx in key_indices.items():
         lm = landmarks.landmark[idx]
         points[name] = {"x": round(lm.x * w, 1), "y": round(lm.y * h, 1)}
 
-    # check face symmetry: distance from nose to left eye vs nose to right eye
+    # symmetry check, compare nose to left eye vs nose to right eye
     nose = points["nose"]
     left_dist = abs(nose["x"] - points["left_eye"]["x"])
     right_dist = abs(nose["x"] - points["right_eye"]["x"])
 
-    # asymmetry ratio: perfectly symmetric = 1.0, > 1.5 is suspicious
+    # 1.0 means perfectly symmetric, above 1.5 is suspicious
     if min(left_dist, right_dist) > 0:
         asymmetry = max(left_dist, right_dist) / min(left_dist, right_dist)
     else:
@@ -145,7 +140,7 @@ def compare_adjacent_frames(frame_data, all_frames):
             "summary": "No subsequent frame available for comparison."
         }
 
-    # downscale to 240px width for fast optical flow
+    # shrink to 240px wide so optical flow runs fast
     h, w = curr_img.shape[:2]
     small_w = 240
     small_h = max(1, int(h * (small_w / w)))
@@ -179,10 +174,8 @@ def compare_adjacent_frames(frame_data, all_frames):
 
 def check_metadata(metadata):
     """
-    tool: check_metadata
-    description: Examines the video container metadata and provenance information.
-    Checks for C2PA cryptographic signatures, encoder type, whether camera metadata
-    was stripped, and if the filename suggests a camera source or social media re-encoding.
+    checks the video metadata, like C2PA signatures, encoder, if camera metadata got stripped
+    and if the filename looks like it came from a camera or social media
     """
     provenance = metadata.get("provenance", {})
 
@@ -198,7 +191,7 @@ def check_metadata(metadata):
     }
 
 
-# registry of all available tools so the LLM agent can look them up by name
+# all the tools in one dict so the llm agent can look them up by name
 TOOL_REGISTRY = {
     "analyze_noise_pattern": {
         "function": analyze_noise_pattern,
@@ -214,14 +207,14 @@ TOOL_REGISTRY = {
     },
     "compare_adjacent_frames": {
         "function": compare_adjacent_frames,
-        "needs_frames": True,   # needs the full frames list to find the next frame
+        "needs_frames": True,   # needs all the frames to find the next one
         "needs_metadata": False,
         "description": "Computes optical flow between this frame and the next to detect temporal glitches."
     },
     "check_metadata": {
         "function": check_metadata,
         "needs_frames": False,
-        "needs_metadata": True,  # needs video metadata dict
+        "needs_metadata": True,  # needs the metadata dict
         "description": "Examines video provenance, encoder info, and C2PA compliance."
     }
 }

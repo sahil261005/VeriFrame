@@ -5,7 +5,7 @@ from datetime import datetime
 
 # schemas for registration and login
 def _check_password_bytes(value: str) -> str:
-    # bcrypt only reads the first 72 bytes and bcrypt 5 raises on longer input, so refuse it up front
+    # bcrypt only reads the first 72 bytes and bcrypt 5 throws an error on longer ones so we reject it early
     if len(value.encode("utf-8")) > 72:
         raise ValueError("Password must be at most 72 bytes long")
     return value

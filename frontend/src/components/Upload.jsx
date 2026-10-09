@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { CloudUpload, FileVideo, ScanFace, Activity, AudioWaveform, BadgeCheck, BrainCircuit, Scale, TriangleAlert, X } from 'lucide-react';
 import { analysisService } from '../api';
 
-const MAX_UPLOAD_MB = 50; // keep in step with MAX_UPLOAD_MB on the backend
+const MAX_UPLOAD_MB = 50; // has to match MAX_UPLOAD_MB in the backend
 
 const CHECKS = [
   { icon: ScanFace, name: 'Face-swap detector', desc: 'Vision Transformer on each keyframe', tech: 'ViT · ONNX' },

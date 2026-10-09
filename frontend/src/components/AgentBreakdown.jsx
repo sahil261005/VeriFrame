@@ -9,7 +9,7 @@ const STATUS_BADGE = {
   failed: ['badge-manipulated', 'Failed'],
 };
 
-// 0 = looks real (green) ... 1 = looks fake (red)
+// 0 means it looks real so green, 1 means it looks fake so red
 const scoreColor = (s) => (s >= 0.48 ? 'var(--bad)' : s >= 0.3 ? 'var(--warn)' : 'var(--ok)');
 
 function AgentCard({ icon: Icon, title, status, badgeText, description, scoreLabel, score, footnote }) {
@@ -35,7 +35,8 @@ function AgentCard({ icon: Icon, title, status, badgeText, description, scoreLab
   );
 }
 
-// provenance has no 0-1 fake score: it reports what the file itself says, so it shows facts instead of a meter
+// provenance doesnt have a 0-1 fake score, it just says what the file claims about itself
+// so we show those facts instead of a meter
 function ProvenanceCard({ provenance }) {
   const found = !!provenance.c2pa_present;
   const aiLabel = found && !!provenance.c2pa_ai_generated;
@@ -75,10 +76,11 @@ function AgentBreakdown({ breakdown, isPartial }) {
   const audio = breakdown?.audio_agent || {};
   const llm = breakdown?.llm_agent || {};
   const provenance = breakdown?.provenance_agent || {};
-  // backend skips the face-swap model when signed C2PA credentials already prove AI generation
+  // backend skips the face swap model if signed C2PA credentials already say its AI made
   const visualSkippedForC2pa = visual.status === 'skipped' && provenance.c2pa_ai_generated && provenance.c2pa_signature_valid;
 
-  // llm_agent.reasoning starts with "<provider> ...analyzed N frames (Tools: ...)", then Gemini's summary after "): "
+  // reasoning starts with "<provider> ...analyzed N frames (Tools: ...)"
+// and the gemini summary comes after the "): " part
   const llmReasoning = llm.reasoning || '';
   const llmProvider = llmReasoning.startsWith('Gemini') ? 'Gemini' : llmReasoning.startsWith('Groq') ? 'Groq' : 'LLM';
   const summaryStart = llmReasoning.indexOf('): ');

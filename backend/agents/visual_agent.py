@@ -10,7 +10,7 @@ import config
 
 logger = logging.getLogger(__name__)
 
-# the ViT is a face-swap classifier; mediapipe tells us whether a frame has a face for it to judge
+# the ViT only knows about face swaps so we use mediapipe to check if a frame even has a face
 try:
     import mediapipe as mp
     MEDIAPIPE_AVAILABLE = True
@@ -18,44 +18,42 @@ except ImportError:
     MEDIAPIPE_AVAILABLE = False
     logger.warning("mediapipe not installed, visual agent cannot tell face-less videos apart")
 
-# path to the quantized ONNX deepfake detection model (83 MB, INT8)
+# path to the quantized onnx model, its 83 MB in INT8
 MODEL_DIR = os.path.join(os.path.dirname(__file__), "..", "model_onnx")
 ONNX_MODEL_PATH = os.path.join(MODEL_DIR, "model_quantized.onnx")
 
-# where the face-swap ViT runs. by default (and in production) the local ONNX file in model_onnx/ is used;
-# setting GEN_API_URL sends frames to an external scoring service instead, so the host doesn't hold the model.
+# by default (and in prod) the face swap ViT runs from the local onnx file in model_onnx/
+# if GEN_API_URL is set we send frames to the external service instead so the server doesnt load the model
 FACESWAP_BACKEND = os.environ.get("FACESWAP_BACKEND", "remote" if remote_detector.GEN_API_URL else "local")
 
 
 class _RemoteFaceswap:
-    """marker for the hosted face-swap model; see analyze_frames."""
+    """marker so analyze_frames knows to use the hosted face swap model"""
 
 
-# global ONNX session (loaded once, reused for all requests)
+# onnx session is loaded once and reused for every request
 _onnx_session = None
 _load_lock = threading.Lock()
 
-# must match model_onnx/preprocessor_config.json (ViTImageProcessor), not ImageNet stats
+# these have to match model_onnx/preprocessor_config.json, not the usual imagenet numbers
 _MEAN = np.array([0.5, 0.5, 0.5], dtype=np.float32)
 _STD = np.array([0.5, 0.5, 0.5], dtype=np.float32)
 
-# face detector is shared across requests; mediapipe graphs are not thread-safe, so calls are serialized
+# one face detector shared by all requests. mediapipe isnt thread safe so we lock around it
 _face_detector = None
 _detector_lock = threading.Lock()
 
-# smallest face (pixels, at the 480p analysis resolution) that counts as present
+# smallest face in pixels (at 480p) that we count as a face
 MIN_FACE_SIZE = 24
 
 
 def load_model():
     """
-    loads the quantized ONNX deepfake detection model into memory.
-    this runs the same ViT neural network that was on HuggingFace,
-    but now runs directly on the server with zero external API calls.
+    loads the quantized onnx model. its the same ViT from huggingface
+    but it runs on our server so no API calls needed
     """
     global _onnx_session
 
-    # if already loaded, return the cached session
     if _onnx_session is not None:
         return _onnx_session
 
@@ -64,7 +62,7 @@ def load_model():
         logger.info(f"face-swap model will run on the hosted service {remote_detector.GEN_API_URL}")
         return _onnx_session
 
-    # startup preload thread and the first request can race; load only once
+    # the preload thread at startup and the first request can both get here, so lock it
     with _load_lock:
         if _onnx_session is not None:
             return _onnx_session
@@ -77,13 +75,13 @@ def _load_model_locked():
         import onnxruntime as ort
 
         if os.path.exists(ONNX_MODEL_PATH):
-            # prepacking duplicates the weights in memory (+~150MB, no speed gain here); matters on a 512MB host
+            # prepacking copies the weights again (about 150MB more) and wasnt faster, too much for a 512MB server
             opts = ort.SessionOptions()
             opts.add_session_config_entry("session.disable_prepacking", "1")
-            # the CPU arena keeps every buffer it ever allocated; without it inference memory is returned (-55 MB)
+            # the cpu arena never gives memory back, turning it off saves about 55 MB
             opts.enable_cpu_mem_arena = False
             opts.enable_mem_pattern = False
-            # frames already run in parallel (analyze_video), so each run gets its share of the allowed CPUs
+            # frames already run in parallel so each run only gets its share of the cpus
             opts.intra_op_num_threads = max(1, config.CPU_THREADS // min(6, config.CPU_THREADS))
             opts.inter_op_num_threads = 1
             _onnx_session = ort.InferenceSession(ONNX_MODEL_PATH, opts)
@@ -99,9 +97,8 @@ def _load_model_locked():
 
 def frame_has_face(img_array):
     """
-    true if the frame contains at least one face large enough to matter.
-    the classifier still runs on the full frame: tight face crops were measured to push
-    real faces (LFW photos) to ~90% "fake", so cropping was not adopted.
+    true if theres at least one big enough face in the frame.
+    we still classify the full frame, cropping to the face made real LFW photos come out ~90% fake
     """
     global _face_detector
     if not MEDIAPIPE_AVAILABLE:
@@ -112,7 +109,7 @@ def frame_has_face(img_array):
 
     with _detector_lock:
         if _face_detector is None:
-            # model_selection=1 is the full-range model (faces up to ~5m away)
+            # model_selection=1 is the full range model, works for faces up to ~5m away
             _face_detector = mp.solutions.face_detection.FaceDetection(
                 model_selection=1, min_detection_confidence=0.5
             )
@@ -130,47 +127,42 @@ def frame_has_face(img_array):
 
 def preprocess_frame(img_array):
     """
-    prepares an OpenCV BGR frame for the ViT model.
-    resizes to 224x224, converts to RGB, normalizes pixel values.
+    gets an opencv frame ready for the ViT, resize to 224x224, BGR to RGB and normalize
     """
-    # convert BGR to RGB
     rgb = cv2.cvtColor(img_array, cv2.COLOR_BGR2RGB)
     pil_img = Image.fromarray(rgb)
 
-    # resize to 224x224 (what the ViT model expects)
+    # the ViT wants 224x224
     pil_img = pil_img.resize((224, 224), Image.BILINEAR)
 
-    # convert to numpy array and normalize to [0, 1]
+    # scale pixels to 0-1
     img_np = np.array(pil_img).astype(np.float32) / 255.0
 
     img_np = (img_np - _MEAN) / _STD
 
-    # convert from HWC (height, width, channels) to CHW (channels, height, width)
+    # HWC to CHW because the model wants channels first
     img_np = np.transpose(img_np, (2, 0, 1))
 
-    # add batch dimension: (1, 3, 224, 224)
+    # add batch dimension so its (1, 3, 224, 224)
     return np.expand_dims(img_np, axis=0)
 
 
 def run_onnx_inference(img_array, session):
     """
-    runs the ONNX ViT deepfake classifier on a single frame.
-    returns the fake probability score (0.0 = real, 1.0 = fake).
+    runs the ViT on one frame and returns the fake score, 0.0 is real and 1.0 is fake
     """
     try:
-        # preprocess the frame for the ViT model
         input_tensor = preprocess_frame(img_array)
 
-        # run inference
         input_name = session.get_inputs()[0].name
         output = session.run(None, {input_name: input_tensor})
-        logits = output[0][0]  # shape: (2,) -> [real_logit, fake_logit]
+        logits = output[0][0]  # [real_logit, fake_logit]
 
-        # softmax to convert logits to probabilities
-        exp_logits = np.exp(logits - np.max(logits))  # numerically stable softmax
+        # softmax, subtract the max first so exp doesnt overflow
+        exp_logits = np.exp(logits - np.max(logits))
         probs = exp_logits / exp_logits.sum()
 
-        # index 1 = "Fake" probability
+        # index 1 is the fake class
         fake_score = float(probs[1])
         return fake_score
 
@@ -181,30 +173,29 @@ def run_onnx_inference(img_array, session):
 
 def calculate_heuristic_score(img_array, noise_var):
     """
-    fallback function: calculates fake score using simple image noise and edge sharpness.
-    used only when the ONNX model is unavailable.
+    fallback if the onnx model isnt available, guesses a score from noise and edge sharpness
     """
     gray = cv2.cvtColor(img_array, cv2.COLOR_BGR2GRAY)
     laplacian_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
     base_score = 0.15
 
-    # AI images are unnaturally smooth (normalized noise variance, same scale as tools.analyze_noise_pattern)
+    # AI images tend to be too smooth. noise_var uses the same scale as tools.analyze_noise_pattern
     if noise_var < 0.00003:
         base_score += 0.35
 
-    # check for blurry face blending edges or artificial over-sharpness
+    # blurry blending edges or weirdly sharp edges
     if laplacian_var < 80.0:
         base_score += 0.35
     elif laplacian_var > 600.0:
         base_score += 0.15
 
-    # cap final score between 0.05 and 0.95
+    # keep it between 0.05 and 0.95
     return min(max(base_score, 0.05), 0.95)
 
 
 def analyze_single_frame(frame_data, pipe):
-    """runs deepfake detection on one video frame."""
+    """checks one frame for deepfake stuff"""
     img_array = frame_data["image"]
     timestamp = frame_data["timestamp"]
     noise_var = frame_data.get("noise_variance", 0)
@@ -212,11 +203,11 @@ def analyze_single_frame(frame_data, pipe):
     fake_score = None
     face_found = True
 
-    # Step 1: Try ONNX ViT deep learning model (runs on server CPU in ~0.1s)
+    # first try the onnx ViT, takes about 0.1s on cpu
     if pipe != "heuristic_fallback":
         face_found = frame_has_face(img_array)
         if not face_found:
-            # a face-swap classifier says nothing about frames without a face
+            # no face means the face swap model cant tell us anything
             return {
                 "timestamp": timestamp,
                 "fake_confidence": 0.0,
@@ -226,7 +217,7 @@ def analyze_single_frame(frame_data, pipe):
             }
         fake_score = run_onnx_inference(img_array, pipe)
 
-    # Step 2: Fallback to noise heuristics if ONNX model unavailable or failed
+    # if the model isnt there or it failed, use the noise heuristic
     if fake_score is None:
         fake_score = calculate_heuristic_score(img_array, noise_var)
 
@@ -242,7 +233,7 @@ def analyze_single_frame(frame_data, pipe):
 
 
 def _analyze_remote(frames):
-    """face-swap scores from the hosted model; frames without a face are never sent."""
+    """gets face swap scores from the hosted model, frames with no face dont get sent"""
     has_face = [frame_has_face(f["image"]) for f in frames]
     idx = [i for i, h in enumerate(has_face) if h]
 
@@ -252,7 +243,7 @@ def _analyze_remote(frames):
             probs = remote_detector.post_frames("/faceswap", [frames[i] for i in idx])
             remote_scores = dict(zip(idx, probs))
         except Exception as e:
-            # service unreachable: degrade to the noise heuristics instead of failing the whole agent
+            # if the service is down use the noise heuristic so the whole agent doesnt fail
             logger.warning(f"hosted face-swap model unavailable, using heuristics: {e}")
 
     results = []
@@ -271,7 +262,7 @@ def _analyze_remote(frames):
 
 
 def analyze_frames(frames, pipe):
-    """checks all extracted video frames for deepfakes in parallel."""
+    """checks all the frames for deepfakes in parallel"""
     if not frames:
         return 0.0, [], []
 
@@ -282,17 +273,17 @@ def analyze_frames(frames, pipe):
         with ThreadPoolExecutor(max_workers=workers) as pool:
             per_frame_results = list(pool.map(lambda f: analyze_single_frame(f, pipe), frames))
 
-    # only frames that were actually classified count toward the score
+    # only count frames that actually got classified
     scored = [f for f in per_frame_results if f.get("face_found", True)]
 
-    # calculate average fake score across all scored frames
+    # average fake score
     if len(scored) > 0:
         total_score = sum(f["fake_confidence"] for f in scored)
         visual_score = total_score / len(scored)
     else:
         visual_score = 0.0
 
-    # get top 5 most suspicious frames
+    # top 5 most suspicious frames
     sorted_frames = sorted(scored, key=lambda x: x["fake_confidence"], reverse=True)
     flagged = sorted_frames[:5]
 
@@ -300,11 +291,11 @@ def analyze_frames(frames, pipe):
 
 
 def used_heuristics_only(per_frame_results):
-    """true when the hosted model was unreachable and every scored frame fell back to noise heuristics."""
+    """true if the hosted model was down and every frame used the noise heuristic"""
     scored = [f for f in per_frame_results if f.get("face_found", True)]
     return len(scored) > 0 and all(f.get("source") == "heuristic" for f in scored)
 
 
 def no_faces_found(per_frame_results):
-    """true when the model ran but no frame contained a face it could classify."""
+    """true if the model ran but didnt find a face in any frame"""
     return len(per_frame_results) > 0 and not any(f.get("face_found", True) for f in per_frame_results)

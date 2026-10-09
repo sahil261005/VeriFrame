@@ -4,16 +4,16 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# thread-safe in-memory event store
-# each job has its own list of events that agents push to during pipeline execution
-# the SSE endpoint reads from here to stream events to the frontend
+# simple in memory event store with a lock since agents run in different threads
+# each job gets its own list of events that the agents push to while the pipeline runs
+# the SSE endpoint reads from here and streams them to the frontend
 
 _lock = threading.Lock()
 _events = {}   # job_id -> list of event dicts
 _status = {}   # job_id -> "running" | "completed" | "failed"
 _finished_at = {}  # job_id -> time.time() when the job reached a terminal state
 
-# finished jobs are kept briefly so late or reconnecting SSE clients still get the final event
+# keep finished jobs around for an hour so if the SSE client reconnects late it still gets the final event
 _RETENTION_SECONDS = 3600
 
 
@@ -26,7 +26,7 @@ def _prune_finished_locked():
 
 
 def init_job(job_id):
-    """initialize event storage for a new job"""
+    """set up the event list for a new job"""
     with _lock:
         _prune_finished_locked()
         _events[job_id] = []
@@ -40,8 +40,7 @@ def has_job(job_id):
 
 def publish_event(job_id, agent_name, message):
     """
-    publish a progress event from an agent node.
-    called by each agent node during execution to report what its doing.
+    each agent calls this while running to say what its doing.
     """
     event = {
         "agent": agent_name,
@@ -71,8 +70,8 @@ def mark_failed(job_id):
 def get_events(job_id, after_index=0):
     """
     get events for a job starting from after_index.
-    the SSE endpoint calls this in a loop and only sends new events to the client.
-    returns (events_list, is_done)
+    the SSE endpoint calls this in a loop so it only sends the new ones.
+    returns (events, is_done, status)
     """
     with _lock:
         events = _events.get(job_id, [])

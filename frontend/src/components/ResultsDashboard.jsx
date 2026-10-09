@@ -15,7 +15,7 @@ const VERDICTS = {
     summary: 'The evidence is mixed or incomplete, so VeriFrame does not call it either way.' },
 };
 
-// time-per-stage bar: frame extraction plus each LangGraph node
+// bar showing how long each stage took, frame extraction plus each langgraph node
 const STAGE_META = {
   extract: { label: 'Frame extraction', color: '#b9b4a6' },
   cv_parallel: { label: 'CV agents', color: '#4a4e55' },
@@ -82,6 +82,23 @@ function ResultsDashboard() {
       <div className="card" style={{ maxWidth: '560px', margin: '48px auto 0', textAlign: 'center', padding: '36px' }}>
         <h2 style={{ color: 'var(--danger)', fontSize: '18px', marginBottom: '10px' }}>Could not load the report</h2>
         <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>{error}</p>
+        <Link to="/" className="btn btn-secondary"><ArrowLeft size={15} /> New analysis</Link>
+      </div>
+    );
+  }
+
+  // before this, opening a failed or still running job showed an empty "Uncertain" report
+  if (data.status !== 'completed') {
+    return (
+      <div className="card" style={{ maxWidth: '560px', margin: '48px auto 0', textAlign: 'center', padding: '36px' }}>
+        <h2 style={{ fontSize: '18px', marginBottom: '10px' }}>
+          {data.status === 'failed' ? 'This analysis did not finish' : 'This analysis is still running'}
+        </h2>
+        <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>
+          {data.status === 'failed'
+            ? 'Something went wrong while analyzing this video. Please upload it again.'
+            : 'Refresh this page in a few seconds to see the result.'}
+        </p>
         <Link to="/" className="btn btn-secondary"><ArrowLeft size={15} /> New analysis</Link>
       </div>
     );

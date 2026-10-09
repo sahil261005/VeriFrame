@@ -3,8 +3,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# weasyprint is heavy (cairo/pango); import it only when a PDF is actually requested so it does not
-# sit in memory on a 512MB host for every analysis request
+# weasyprint is heavy because of cairo and pango, so we only import it when someone asks for a pdf
+# that way it doesnt sit in memory on the 512mb server for every request
 def _load_weasyprint():
     try:
         from weasyprint import HTML
@@ -15,12 +15,9 @@ def _load_weasyprint():
 
 
 def generate_pdf(report_dict: dict) -> bytes:
-    """
-    generates a PDF report from a report dictionary.
-    uses WeasyPrint if available, otherwise returns HTML as bytes.
-    """
+    """makes a pdf from the report dict, or returns the html as bytes if weasyprint isnt available"""
     
-    # build custom HTML template with inline styling
+    # html template with inline css
     html_content = f"""
     <html>
     <head>
@@ -212,7 +209,7 @@ def generate_pdf(report_dict: dict) -> bytes:
     </html>
     """
 
-    # convert to PDF bytes if weasyprint works, otherwise return HTML text bytes
+    # turn it into a pdf if weasyprint works, otherwise just return the html
     HTML = _load_weasyprint()
     if HTML is not None:
         try:
@@ -222,5 +219,5 @@ def generate_pdf(report_dict: dict) -> bytes:
             logger.error(f"error rendering PDF with weasyprint: {e}. returning raw HTML instead.", exc_info=True)
             return html_content.encode("utf-8")
     else:
-        # fallback to plain HTML bytes
+        # fallback to plain html bytes
         return html_content.encode("utf-8")

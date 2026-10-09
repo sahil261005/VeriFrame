@@ -3,9 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { Film, ScanFace, Activity, AudioWaveform, GitBranch, BrainCircuit, RefreshCw, Scale, Check, X, LoaderCircle, Minus, TriangleAlert, Terminal } from 'lucide-react';
 import { analysisService } from '../api';
 
-// pipeline stages in graph order. `match` is a substring of the agent name the backend streams,
-// `rank` orders the graph (visual/temporal/audio run in parallel), `weight` is the share of the progress bar
-// (roughly how long the stage takes), `tau` is how fast the bar creeps while the stage is running (seconds)
+// stages in graph order. match is part of the agent name the backend sends, rank is the order in the graph
+// visual temporal and audio share a rank since they run in parallel. weight is how much of the bar a stage gets
+// and tau is how fast the bar creeps while it runs, in seconds
 const STAGES = [
   { key: 'ingest', short: 'frames', name: 'Frame extraction', desc: 'Keyframes, motion bursts and C2PA check', icon: Film, rank: 0, weight: 8, tau: 3 },
   { key: 'visual', short: 'visual', match: 'Visual Forensics', name: 'Visual agent', desc: 'Face-swap ViT on every keyframe', icon: ScanFace, rank: 1, weight: 12, tau: 6 },
@@ -35,7 +35,7 @@ function stageStates(events, completed) {
   }
   states.ingest = events.length > 0 ? 'done' : 'active';
 
-  // a stage further down the graph has started, so everything before it has finished
+  // if a later stage started then everything before it must be done
   const maxRank = Math.max(0, ...STAGES.filter((s) => states[s.key] !== 'pending').map((s) => s.rank));
   for (const stage of STAGES) {
     if (stage.rank < maxRank && (states[stage.key] === 'pending' || states[stage.key] === 'active')) {
@@ -46,8 +46,8 @@ function stageStates(events, completed) {
     }
   }
 
-  // the reflection loop can send the graph back to the LLM: whatever stage spoke last and has not
-  // finished is the one running now, and anything after it in the graph has finished its pass
+  // reflection can send it back to the llm, so the last stage that sent something and isnt done is the
+  // one running now, and everything after it already finished its pass
   const last = events[events.length - 1];
   const lastStage = last && STAGES.find((s) => s.match && last.agent.includes(s.match));
   if (!completed && lastStage && !finalState(last.message) && lastStage.key !== 'router') {
@@ -79,7 +79,7 @@ function StatusFeed({ jobId, onAnalysisComplete }) {
     completeCb.current = onAnalysisComplete;
   }, [onAnalysisComplete]);
 
-  // SSE stream plus a 1s status poll as a safety net (SSE can drop on free hosting)
+  // SSE plus polling the status every 1s as a backup, SSE sometimes drops on free hosting
   useEffect(() => {
     const markDone = () => setCompleted(true);
     const markFailed = () => setError('The analysis pipeline hit an error. Please try again.');
@@ -114,8 +114,8 @@ function StatusFeed({ jobId, onAnalysisComplete }) {
 
   const states = stageStates(events, completed);
 
-  // progress target: finished stages count fully, running stages creep towards 90% of their share
-  // (a stage is running since its first streamed event; frame extraction since the page opened)
+  // done stages count fully, running ones creep up to 90% of their share
+  // a stage counts as running from its first event, frame extraction from when the page opened
   let target = 0;
   const stageFill = {};
   for (const stage of STAGES) {
@@ -136,7 +136,7 @@ function StatusFeed({ jobId, onAnalysisComplete }) {
     targetRef.current = target;
   }, [target]);
 
-  // animation tick: ease the shown number toward the target, never backwards
+  // move the shown number toward the target a bit each tick, never go backwards
   useEffect(() => {
     const id = setInterval(() => {
       setNow(Date.now());
@@ -149,7 +149,7 @@ function StatusFeed({ jobId, onAnalysisComplete }) {
     return () => clearInterval(id);
   }, []);
 
-  // as soon as the bar reaches 100, open the report
+  // once the bar hits 100 go to the report
   useEffect(() => {
     if (display >= 100 && completed && !finishedRef.current) {
       finishedRef.current = true;
@@ -161,7 +161,7 @@ function StatusFeed({ jobId, onAnalysisComplete }) {
     }
   }, [display, completed, jobId, navigate]);
 
-  // keep the newest event in view inside the log box (scrolling the box, not the page)
+  // scroll the log box to the newest event, only the box and not the whole page
   useEffect(() => {
     const el = logRef.current;
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });

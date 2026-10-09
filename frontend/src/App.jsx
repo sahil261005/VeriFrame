@@ -8,7 +8,7 @@ import StatusFeed from './components/StatusFeed';
 import ResultsDashboard from './components/ResultsDashboard';
 import { authService } from './api';
 
-// Route guard wrapper for authenticated endpoints
+// only lets logged in users through
 const ProtectedRoute = ({ children }) => {
   if (!authService.isAuthenticated()) {
     return <Navigate to="/login" replace />;
@@ -16,7 +16,7 @@ const ProtectedRoute = ({ children }) => {
   return children;
 };
 
-// Route guard wrapper for public auth pages
+// if youre already logged in theres no point showing login/register
 const PublicRoute = ({ children }) => {
   if (authService.isAuthenticated()) {
     return <Navigate to="/" replace />;
@@ -33,7 +33,7 @@ function App() {
         <Navbar />
         <main className="main-content">
           <Routes>
-            {/* authentication paths */}
+            {/* login and register */}
             <Route path="/login" element={
               <PublicRoute>
                 <Login />
@@ -45,7 +45,7 @@ function App() {
               </PublicRoute>
             } />
 
-            {/* scan upload dashboard home path */}
+            {/* home page, upload a video or watch the current scan */}
             <Route path="/" element={
               <ProtectedRoute>
                 {activeJobId ? (
@@ -61,14 +61,14 @@ function App() {
               </ProtectedRoute>
             } />
 
-            {/* results dashboard detailed analysis path */}
+            {/* results for one scan */}
             <Route path="/analysis/:jobId" element={
               <ProtectedRoute>
                 <ResultsDashboard />
               </ProtectedRoute>
             } />
 
-            {/* default route fallback */}
+            {/* anything else just goes home */}
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>

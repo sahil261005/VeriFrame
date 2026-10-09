@@ -1,19 +1,19 @@
 @import url('https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
 
-/* VeriFrame: a forensic case report. Paper and ink, hairline rules, one signal accent.
-   Layout: left-aligned report columns; state carried by verdict colour and threshold meters. */
+/* veriframe styles, trying to make it look like a printed forensic report
+   with mostly black and white and one orange accent */
 :root {
   color-scheme: light;
 
-  --paper: #f6f5f1;        /* page ground */
-  --sheet: #ffffff;        /* report sheets */
-  --sheet-2: #f1efe9;      /* inset wells, tracks */
-  --rule: #e2dfd6;         /* hairlines */
+  --paper: #f6f5f1;        /* page background */
+  --sheet: #ffffff;        /* report cards */
+  --sheet-2: #f1efe9;      /* inner boxes and bar tracks */
+  --rule: #e2dfd6;         /* thin border lines */
   --rule-strong: #cfcbbf;
-  --ink: #17191c;          /* text + primary actions */
+  --ink: #17191c;          /* text and main buttons */
   --ink-2: #4a4e55;
   --ink-3: #7c8088;
-  --signal: #c2410c;       /* the one accent: evidence-tag orange */
+  --signal: #c2410c;       /* the accent color, orange like an evidence tag */
   --signal-soft: #fbeee6;
 
   --ok: #1d6b45;   --ok-soft: #e6f2eb;
@@ -26,7 +26,7 @@
   --radius: 6px;
   --transition: 0.16s ease;
 
-  /* legacy names still referenced inline by older components */
+  /* old names, some older components still use these inline */
   --text-primary: var(--ink);
   --text-secondary: var(--ink-2);
   --text-muted: var(--ink-3);
@@ -64,7 +64,7 @@ a { color: var(--ink); }
 .muted { color: var(--ink-3); }
 :focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
 
-/* ---------- layout ---------- */
+/* layout */
 .app-container { display: flex; flex-direction: column; min-height: 100vh; }
 .main-content { flex: 1; width: 100%; max-width: 1120px; margin: 0 auto; padding: 36px 20px 72px; }
 
@@ -96,7 +96,7 @@ a { color: var(--ink); }
 }
 .section-title h2 { font-size: 15px; font-weight: 700; }
 
-/* ---------- forms + buttons ---------- */
+/* forms and buttons */
 .form-group { margin-bottom: 16px; }
 .form-label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: var(--ink-2); }
 .form-input {
@@ -138,7 +138,7 @@ a { color: var(--ink); }
 .btn-danger { background: var(--bad); border-color: var(--bad); }
 .btn-disabled { opacity: 0.55; pointer-events: none; }
 
-/* ---------- navbar ---------- */
+/* navbar */
 .navbar {
   position: sticky;
   top: 0;
@@ -156,7 +156,7 @@ a { color: var(--ink); }
 .nav-links { display: flex; align-items: center; gap: 8px; }
 .nav-user { font-family: var(--font-mono); font-size: 12px; color: var(--ink-3); padding: 0 8px; }
 
-/* ---------- badges + chips ---------- */
+/* badges and chips */
 .badge {
   display: inline-flex;
   align-items: center;
@@ -183,7 +183,7 @@ a { color: var(--ink); }
 .spinner { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--rule); border-left-color: var(--ink); animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* ---------- threshold meter (0.30 authentic / 0.48 manipulated, as in synthesis) ---------- */
+/* threshold meter, uses the same 0.30 and 0.48 cutoffs as the backend */
 .meter { position: relative; height: 8px; border-radius: 2px; background: linear-gradient(90deg, var(--ok-soft) 0 30%, var(--warn-soft) 30% 48%, var(--bad-soft) 48% 100%); }
 .meter-fill { position: absolute; inset: 0 auto 0 0; border-radius: 2px; transition: width 0.7s ease; }
 .meter-tick { position: absolute; top: -3px; bottom: -3px; width: 1px; background: var(--rule-strong); }
@@ -192,7 +192,7 @@ a { color: var(--ink); }
 .meter-scale span:first-child { transform: none; }
 .meter-scale span:last-child { transform: translateX(-100%); }
 
-/* ---------- upload ---------- */
+/* upload */
 .intake { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 48px; align-items: start; }
 .intake h1 { font-size: clamp(34px, 4.6vw, 52px); font-weight: 800; line-height: 1.02; letter-spacing: -0.035em; margin: 12px 0 16px; }
 .intake h1 em { font-style: normal; color: var(--signal); }
@@ -216,7 +216,7 @@ a { color: var(--ink); }
 .dropzone:hover, .dropzone.active { border-color: var(--ink); background: #fdfcfa; }
 .dropzone-icon { width: 48px; height: 48px; margin: 0 auto 14px; border-radius: 6px; display: grid; place-items: center; background: var(--sheet-2); color: var(--ink); border: 1px solid var(--rule); }
 
-/* ---------- live analysis ---------- */
+/* live analysis */
 .run-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
 .run-head h1 { font-size: 30px; font-weight: 800; letter-spacing: -0.03em; margin-top: 6px; }
 .live-pill { display: inline-flex; align-items: center; gap: 8px; }
@@ -264,7 +264,7 @@ a { color: var(--ink); }
 .log-agent { color: var(--ink); font-weight: 600; margin-right: 6px; }
 .log-msg { color: var(--ink-2); word-break: break-word; }
 
-/* ---------- results ---------- */
+/* results */
 .verdict { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 36px; padding: 0; overflow: hidden; }
 .verdict-main { padding: 26px 0 24px 26px; min-width: 0; }
 .verdict-side { padding: 26px; border-left: 1px solid var(--rule); background: var(--verdict-soft, var(--sheet-2)); display: flex; flex-direction: column; justify-content: space-between; gap: 18px; }
@@ -311,7 +311,7 @@ a { color: var(--ink); }
 .modal-backdrop { position: fixed; inset: 0; background: rgba(23, 25, 28, 0.45); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 20px; }
 .modal { max-width: 680px; width: 100%; max-height: calc(100vh - 40px); overflow-y: auto; }
 
-/* ---------- auth ---------- */
+/* auth */
 .auth-split-layout { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr); gap: 64px; align-items: start; max-width: 1040px; margin: 24px auto 0; }
 .auth-info-side { min-width: 0; }
 .auth-card-side { min-width: 0; width: 100%; max-width: 420px; justify-self: end; }
@@ -332,7 +332,7 @@ a { color: var(--ink); }
 .specimen-note { display: flex; gap: 10px; align-items: flex-start; padding: 12px 18px; border-top: 1px solid var(--rule); background: var(--sheet-2); font-size: 12.5px; color: var(--ink-2); line-height: 1.5; border-radius: 0 0 var(--radius) var(--radius); }
 .specimen-note svg { flex-shrink: 0; margin-top: 2px; }
 
-/* ---------- responsive ---------- */
+/* mobile */
 @media (max-width: 900px) {
   .intake, .run-grid { grid-template-columns: 1fr; gap: 28px; }
   .verdict { grid-template-columns: 1fr; gap: 0; }

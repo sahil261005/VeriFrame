@@ -13,23 +13,23 @@ except ImportError:
     MEDIAPIPE_AVAILABLE = False
     logger.warning("mediapipe not installed, face consistency checks will be skipped")
 
-# each keyframe carries a "burst" of consecutive frames (see preprocessing.extract_frames).
-# both checks compare neighbouring frames inside a burst, never keyframes a second apart,
-# so normal scene/head motion over time is not mistaken for an artifact.
+# each keyframe comes with a "burst" of frames right after it (see preprocessing.extract_frames).
+# both checks only compare frames next to each other inside a burst, not keyframes a second apart,
+# otherwise normal head or scene movement would look like an artifact
 
 FLOW_WIDTH = 240
-SCENE_CUT_CORRELATION = 0.5     # histogram correlation below this = hard cut, not an artifact
-STILL_FLOW = 0.05               # transitions below this are duplicated/static frames
-SPIKE_RATIO = 3.0               # transition moving 3x more than the burst's typical motion
-SPIKE_MIN_MAGNITUDE = 1.0       # ignore spikes that are tiny in absolute terms (pixels at FLOW_WIDTH)
+SCENE_CUT_CORRELATION = 0.5     # if histogram correlation is below this its a scene cut, not an artifact
+STILL_FLOW = 0.05               # below this the frames are basically duplicates
+SPIKE_RATIO = 3.0               # a jump that moves 3x more than the usual motion in the burst
+SPIKE_MIN_MAGNITUDE = 1.0       # skip spikes that are tiny anyway, in pixels at FLOW_WIDTH
 MIN_TRANSITIONS = 4
 
-# rigid facial points (eye corners, nose bridge/tip, nostrils, forehead) that barely move with expressions
+# face points that barely move when someone talks or smiles, like eye corners, nose, nostrils and forehead
 RIGID_LANDMARKS = [33, 133, 362, 263, 168, 6, 197, 195, 5, 4, 1, 98, 327, 10]
 LEFT_EYE_OUTER, RIGHT_EYE_OUTER = 33, 263
-MIN_EYE_DISTANCE = 20.0         # pixels; smaller faces give landmark noise, not signal
-MIN_FACE_RUN = 5                # consecutive frames with a face needed to measure jitter
-JITTER_THRESHOLD = 0.04         # frame-to-frame shape jitter, as a fraction of eye distance (real-face noise floor measured ~0.01, max 0.025)
+MIN_EYE_DISTANCE = 20.0         # in pixels, faces smaller than this just give noisy landmarks
+MIN_FACE_RUN = 5                # need at least this many frames in a row with a face to measure jitter
+JITTER_THRESHOLD = 0.04         # jitter as a fraction of eye distance. real faces measured around 0.01, max 0.025
 
 
 def _gray_small(img):
@@ -66,7 +66,7 @@ def _burst_flow(frame):
         mag, _ = cv2.cartToPolar(flow[..., 0], flow[..., 1])
         magnitudes.append(float(np.mean(mag)))
 
-    # duplicated frames (frame-rate conversion) would drag the median to zero and fake spikes
+    # duplicate frames from fps conversion pull the median to zero and make fake spikes, so drop them
     moving = [m for m in magnitudes if m > STILL_FLOW]
     if len(moving) < MIN_TRANSITIONS:
         return None
@@ -84,7 +84,7 @@ def _burst_flow(frame):
 
 
 def compute_optical_flow(frames):
-    # look for sudden motion spikes between consecutive frames (spliced/dropped/glitched frames)
+    # look for sudden jumps in motion between frames, like spliced or dropped or glitchy frames
     results = []
     for frame in frames:
         r = _burst_flow(frame)
@@ -94,7 +94,7 @@ def compute_optical_flow(frames):
 
 
 def _similarity_align(src, dst):
-    # least-squares rotation + uniform scale + translation mapping src points onto dst (umeyama)
+    # umeyama alignment, finds the rotation, scale and shift that best maps src onto dst
     mu_s, mu_d = src.mean(axis=0), dst.mean(axis=0)
     s, d = src - mu_s, dst - mu_d
     var_s = (s ** 2).sum() / len(src)
@@ -126,7 +126,7 @@ def _burst_jitter(face_mesh, frame):
         eye_dists.append(np.hypot(lm[LEFT_EYE_OUTER].x * w - lm[RIGHT_EYE_OUTER].x * w,
                                   lm[LEFT_EYE_OUTER].y * h - lm[RIGHT_EYE_OUTER].y * h))
 
-    # longest run of consecutive frames with a face
+    # find the longest run of frames in a row that have a face
     best, run = [], []
     for pts in shapes:
         if pts is None:
@@ -142,10 +142,10 @@ def _burst_jitter(face_mesh, frame):
     if eye_dist < MIN_EYE_DISTANCE:
         return None
 
-    # remove head translation/rotation/zoom so only the face shape itself is compared
+    # undo head movement, rotation and zoom so we only compare the face shape
     aligned = [best[0]] + [_similarity_align(p, best[0]) for p in best[1:]]
 
-    # second difference: smooth motion (even a steady head turn) cancels out, frame-to-frame jitter does not
+    # second difference cancels out smooth motion like a slow head turn but jitter still shows up
     jitters = []
     for a, b, c in zip(aligned, aligned[1:], aligned[2:]):
         jitters.append(float(np.mean(np.linalg.norm(a - 2 * b + c, axis=1))) / eye_dist)
@@ -159,13 +159,13 @@ def _burst_jitter(face_mesh, frame):
 
 
 def check_face_consistency(frames):
-    # track rigid facial landmarks across consecutive frames.
-    # a real face moves smoothly; face-swaps tend to make the landmarks jitter frame to frame
+    # track the rigid face landmarks across frames.
+    # a real face moves smoothly but face swaps usually make the landmarks jitter
     if not MEDIAPIPE_AVAILABLE:
         logger.info("skipping face consistency (mediapipe not available)")
         return []
 
-    # static mode: every frame is measured independently, so tracking does not smooth jitter away
+    # static mode so each frame is detected on its own, tracking mode would smooth the jitter away
     face_mesh = mp.solutions.face_mesh.FaceMesh(
         static_image_mode=True,
         max_num_faces=1,
@@ -190,8 +190,8 @@ def run_temporal_analysis(frames):
         flow_results = future_flow.result()
         face_results = future_face.result()
 
-    # per keyframe burst: face jitter is face-swap specific (full weight); a lone motion spike can
-    # also be an edit or a jump cut, so it counts half
+    # score each burst. face jitter is pretty specific to face swaps so it counts as 1.0,
+    # a motion spike could just be an edit or jump cut so it only counts 0.5
     burst_scores = {}
     for r in flow_results:
         burst_scores[r["timestamp"]] = 0.5 if r["is_anomalous"] else 0.0

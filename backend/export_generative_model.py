@@ -1,6 +1,6 @@
 """
-one-off script that builds model_gen_onnx/model_quantized.onnx (the generative-video detector, ~200MB).
-needs torch + transformers + onnx just for this export; the server itself only needs onnxruntime.
+one off script that builds model_gen_onnx/model_quantized.onnx, the generative video detector, about 200mb.
+needs torch, transformers and onnx just for the export. the server itself only needs onnxruntime
 
     pip install torch transformers onnx onnxscript
     python export_generative_model.py

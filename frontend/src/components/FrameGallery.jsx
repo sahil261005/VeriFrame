@@ -14,7 +14,7 @@ function FrameGallery({ thumbnails, explanations }) {
 
   const frames = (thumbnails || []).map((item) => {
     const tsVal = Number(item.timestamp);
-    // keys may arrive as "1.333" or "1.333s"; match within 0.15s to absorb rounding
+    // keys can be "1.333" or "1.333s" so we match within 0.15s to deal with rounding
     const matchedKey = Object.keys(explanations || {}).find((key) => Math.abs(parseFloat(key) - tsVal) < 0.15);
     const explanation = matchedKey && explanations[matchedKey] ? explanations[matchedKey] : 'No LLM explanation is available for this frame.';
     return { ...item, explanation };
@@ -43,7 +43,7 @@ function FrameGallery({ thumbnails, explanations }) {
         </div>
       )}
 
-      {/* portal to <body>: the page's fade-in animation makes it the containing block for position:fixed */}
+      {/* had to portal this to body, the page fade in animation was breaking position fixed */}
       {selectedFrame && createPortal(
         <div className="modal-backdrop" onClick={() => setSelectedFrame(null)}>
           <div className="card modal" onClick={(e) => e.stopPropagation()}>
